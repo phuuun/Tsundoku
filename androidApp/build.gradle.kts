@@ -1,3 +1,4 @@
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -11,6 +12,11 @@ dependencies {
     implementation(libs.compose.uiToolingPreview)
 }
 
+// Release signing comes from keystore.properties (gitignored); the key itself lives outside the repo.
+val keystore = Properties().apply {
+    rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+
 android {
     namespace = "com.phuuun.tsundoku"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
@@ -19,17 +25,27 @@ android {
         applicationId = "com.phuuun.tsundoku"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 4 // must go up with every release, or Android won't install it as an update
+        versionName = "1.3"
     }
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+    signingConfigs {
+        // Only when the key is there, so builds still work on a machine without it.
+        if (keystore.isNotEmpty()) create("release") {
+            storeFile = file(keystore.getProperty("storeFile"))
+            storePassword = keystore.getProperty("storePassword")
+            keyAlias = keystore.getProperty("keyAlias")
+            keyPassword = keystore.getProperty("keyPassword")
+        }
+    }
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {
