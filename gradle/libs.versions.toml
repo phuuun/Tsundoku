@@ -5,9 +5,12 @@ android-minSdk = "24"
 android-targetSdk = "37"
 androidx-activity = "1.13.0"
 coil = "3.5.0"
-compose-material3 = "1.11.0-alpha07"
-compose-multiplatform = "1.11.1"
-kotlin = "2.4.10"
+compose-material3 = "1.12.0-alpha03"
+compose-multiplatform = "1.12.1"
+camerak = "1.2"
+easyqrscan = "0.7.2"
+filekit = "0.16.0"
+kotlin = "2.4.20"
 kotlinx-io = "0.9.1"
 kotlinx-serialization = "1.11.0"
 ktor = "3.5.1"
@@ -24,6 +27,9 @@ compose-uiTooling = { module = "org.jetbrains.compose.ui:ui-tooling", version.re
 compose-uiToolingPreview = { module = "org.jetbrains.compose.ui:ui-tooling-preview", version.ref = "compose-multiplatform" }
 kotlinx-io = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinx-io" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+camerak = { module = "io.github.kashif-mehmood-km:camerak", version.ref = "camerak" }
+easyqrscan = { module = "io.github.kalinjul.easyqrscan:scanner", version.ref = "easyqrscan" }
+filekit-core = { module = "io.github.vinceglb:filekit-core", version.ref = "filekit" }
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
 ktor-client-darwin = { module = "io.ktor:ktor-client-darwin", version.ref = "ktor" }
 ktor-client-okhttp = { module = "io.ktor:ktor-client-okhttp", version.ref = "ktor" }

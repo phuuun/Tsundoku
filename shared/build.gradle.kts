@@ -54,6 +54,9 @@ kotlin {
 
             implementation(libs.coil.compose)
             implementation(libs.coil.network.ktor)
+            implementation(libs.easyqrscan)
+            implementation(libs.filekit.core)
+            implementation(libs.camerak)
         }
         commonTest.dependencies {
             implementation(kotlin("test"))
