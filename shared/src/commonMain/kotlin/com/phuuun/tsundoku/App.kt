@@ -80,6 +80,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.SelectableDates
+import androidx.compose.material3.rememberDatePickerState
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.atStartOfDayIn
+import kotlinx.datetime.toLocalDateTime
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.OutlinedButton
@@ -113,13 +125,15 @@ private fun Shelves(library: Library) {
     val scope = rememberCoroutineScope()
     val haptics = LocalHapticFeedback.current
     var adding by remember { mutableStateOf(false) }
-    var open by remember { mutableStateOf<Book?>(null) }
+    var openIsbn by remember { mutableStateOf<String?>(null) }
 
     Box(Modifier.fillMaxSize().background(colors.background)) {
         Column(Modifier.fillMaxSize()) {
             Header(pager) { scope.launch { pager.animateScrollToPage(it) } }
             HorizontalPager(pager, Modifier.weight(1f)) { page ->
-                val shelf = library.books.filter { it.finished == (page == 1) }
+                val shelf =
+                    if (page == 0) library.books.filter { !it.finished }
+                    else library.books.filter { it.finished }.sortedByDescending { it.lastRead?.finishedOn }
                 if (shelf.isEmpty()) EmptyShelf(page)
                 else LazyVerticalGrid(
                     columns = GridCells.Adaptive(100.dp),
@@ -129,7 +143,7 @@ private fun Shelves(library: Library) {
                     modifier = Modifier.fillMaxSize(),
                 ) {
                     items(shelf, key = { it.isbn }) { book ->
-                        ShelfBook(book, Modifier.animateItem()) { open = book }
+                        ShelfBook(book, Modifier.animateItem()) { openIsbn = book.isbn }
                     }
                 }
             }
@@ -158,25 +172,36 @@ private fun Shelves(library: Library) {
         }
     }
 
-    open?.let { book ->
-        ModalBottomSheet(onDismissRequest = { open = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = colors.surfaceContainerLow, dragHandle = null) {
+    // Looked up live, so editing a read inside the sheet shows straight away.
+    library.books.find { it.isbn == openIsbn }?.let { book ->
+        ModalBottomSheet(onDismissRequest = { openIsbn = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = colors.surfaceContainerLow, dragHandle = null) {
             DragHandle()
             BookDetails(
                 book,
-                onFinish = { rating, review ->
-                    library.setFinished(book, true, rating, review)
-                    open = null
+                onFinish = { read ->
+                    library.finish(book, read)
+                    openIsbn = null
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     scope.launch { pager.animateScrollToPage(1) }
                 },
-                onUnfinish = {
-                    library.setFinished(book, false)
-                    open = null
+                onReread = {
+                    library.reread(book)
+                    openIsbn = null
+                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     scope.launch { pager.animateScrollToPage(0) }
+                },
+                onEditRead = { index, read -> library.editRead(book, index, read) },
+                onDeleteRead = { index ->
+                    library.deleteRead(book, index)
+                    // Deleting the only read sends the book back to To read; follow it there.
+                    if (book.finished && book.reads.size == 1) {
+                        openIsbn = null
+                        scope.launch { pager.animateScrollToPage(0) }
+                    }
                 },
                 onRemove = {
                     library.remove(book)
-                    open = null
+                    openIsbn = null
                 },
             )
         }
@@ -260,7 +285,18 @@ private fun ShelfBook(book: Book, modifier: Modifier, onClick: () -> Unit) {
             .graphicsLayer { scaleX = scale; scaleY = scale }
             .clickable(interactionSource = press, indication = null, onClick = onClick)
     ) {
-        Cover(book, Modifier.fillMaxWidth())
+        Box {
+            Cover(book, Modifier.fillMaxWidth())
+            if (book.rereading) Text(
+                "REREAD",
+                style = MaterialTheme.typography.labelSmall,
+                fontSize = 9.sp,
+                color = Color.White,
+                modifier = Modifier.padding(6.dp)
+                    .background(Color.Black.copy(alpha = 0.75f), CircleShape)
+                    .padding(horizontal = 8.dp, vertical = 3.dp),
+            )
+        }
         Text(
             book.title,
             style = MaterialTheme.typography.labelLarge,
@@ -399,8 +435,8 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
         if (cover != null) photo = cover
     }
 
-    fun add(finished: Boolean, rating: Int? = null, review: String? = null) {
-        library.add(book.copy(title = book.title.trim(), author = book.author.trim(), finished = finished, rating = rating, review = review), photo)
+    fun add(finished: Boolean, read: Read? = null) {
+        library.add(book.copy(title = book.title.trim(), author = book.author.trim(), finished = finished, reads = listOfNotNull(read)), photo)
         onAdded(finished)
     }
 
@@ -554,7 +590,7 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
                         )
                     }
 
-                    Step.Rate -> RateBook(book, photo, "Add to Finished") { rating, review -> add(true, rating, review) }
+                    Step.Rate -> RateBook(book, photo, Read(today()), "How was it?", "Add to Finished") { add(true, it) }
                 }
             }
         }
@@ -577,12 +613,29 @@ private fun ReadYet(onNotYet: () -> Unit, onYes: () -> Unit, enabled: Boolean = 
     }
 }
 
-/** Stars and a review, both optional: an empty review is saved as none, and tapping the lit star again clears the rating. */
+/**
+ * One read: when you finished it, stars and a review. Stars and review are optional: an empty review is saved as none,
+ * and tapping the lit star again clears the rating. [onDelete] adds a "Delete this read" button.
+ */
 @Composable
-private fun RateBook(book: Book, photo: ByteArray?, button: String, onDone: (rating: Int?, review: String?) -> Unit) {
+private fun RateBook(
+    book: Book,
+    photo: ByteArray?,
+    initial: Read,
+    heading: String,
+    button: String,
+    onDelete: (() -> Unit)? = null,
+    onDone: (Read) -> Unit,
+) {
     val colors = MaterialTheme.colorScheme
-    var rating by remember { mutableStateOf(book.rating) }
-    var review by remember { mutableStateOf(book.review.orEmpty()) }
+    var finishedOn by remember { mutableStateOf(initial.finishedOn) }
+    var rating by remember { mutableStateOf(initial.rating) }
+    var review by remember { mutableStateOf(initial.review.orEmpty()) }
+    var picking by remember { mutableStateOf(false) }
+    var confirmDelete by remember { mutableStateOf(false) }
+
+    if (picking) PickDate(finishedOn, onPick = { finishedOn = it }, onDismiss = { picking = false })
+
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
             Cover(book, Modifier.width(44.dp), photo = photo)
@@ -591,7 +644,7 @@ private fun RateBook(book: Book, photo: ByteArray?, button: String, onDone: (rat
                 if (book.author.isNotBlank()) Text(book.author, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
             }
         }
-        Text("How was it?", style = MaterialTheme.typography.headlineSmall)
+        Text(heading, style = MaterialTheme.typography.headlineSmall)
         Stars(rating, size = 40.sp) { rating = it }
         OutlinedTextField(
             value = review,
@@ -607,7 +660,58 @@ private fun RateBook(book: Book, photo: ByteArray?, button: String, onDone: (rat
             ),
             modifier = Modifier.fillMaxWidth(),
         )
-        PillButton(button, { onDone(rating, review.trim().ifEmpty { null }) }, Modifier.fillMaxWidth())
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("FINISHED ON", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f))
+            OutlinedButton(
+                onClick = { picking = true },
+                shape = CircleShape,
+                border = BorderStroke(1.dp, colors.outlineVariant),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onSurface),
+            ) { Text(finishedOn.pretty()) }
+        }
+        PillButton(button, { onDone(Read(finishedOn, rating, review.trim().ifEmpty { null })) }, Modifier.fillMaxWidth())
+        if (onDelete != null) TextButton(
+            onClick = { if (confirmDelete) onDelete() else confirmDelete = true },
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+        ) {
+            Text(
+                if (confirmDelete) "Tap again to delete this read" else "Delete this read",
+                color = if (confirmDelete) colors.error else colors.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private val Months = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+/** 30 Sep 2026 */
+private fun LocalDate.pretty() = "$day ${Months[month.ordinal]} $year"
+
+/** Material's calendar, up to today. It speaks UTC-midnight millis, so dates go in and out through UTC. */
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
+@Composable
+private fun PickDate(date: LocalDate, onPick: (LocalDate) -> Unit, onDismiss: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val todayMillis = today().atStartOfDayIn(TimeZone.UTC).toEpochMilliseconds()
+    val state = rememberDatePickerState(
+        initialSelectedDateMillis = date.atStartOfDayIn(TimeZone.UTC).toEpochMilliseconds(),
+        selectableDates = object : SelectableDates {
+            override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= todayMillis
+        },
+    )
+    val pickerColors = DatePickerDefaults.colors(containerColor = colors.surfaceContainerHigh)
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton({
+                state.selectedDateMillis?.let { onPick(Instant.fromEpochMilliseconds(it).toLocalDateTime(TimeZone.UTC).date) }
+                onDismiss()
+            }) { Text("Done", color = colors.onSurface) }
+        },
+        dismissButton = { TextButton(onDismiss) { Text("Cancel", color = colors.onSurfaceVariant) } },
+        colors = pickerColors,
+    ) {
+        DatePicker(state, colors = pickerColors, showModeToggle = false)
     }
 }
 
@@ -659,17 +763,31 @@ private fun CameraOff(permission: CameraPermissionState) {
 @Composable
 private fun BookDetails(
     book: Book,
-    onFinish: (rating: Int?, review: String?) -> Unit,
-    onUnfinish: () -> Unit,
+    onFinish: (Read) -> Unit,
+    onReread: () -> Unit,
+    onEditRead: (index: Int, Read) -> Unit,
+    onDeleteRead: (index: Int) -> Unit,
     onRemove: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     var finishing by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<Int?>(null) }
     var confirmRemove by remember { mutableStateOf(false) }
 
+    val form = Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().imePadding()
+        .padding(start = 24.dp, end = 24.dp, bottom = 28.dp)
     if (finishing) {
-        Box(Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().imePadding().padding(start = 24.dp, end = 24.dp, bottom = 28.dp)) {
-            RateBook(book, null, "Add to Finished", onFinish)
+        Box(form) {
+            RateBook(book, null, Read(today()), if (book.rereading) "How was it this time?" else "How was it?", "Add to Finished", onDone = onFinish)
+        }
+        return
+    }
+    editing?.let { index ->
+        Box(form) {
+            RateBook(
+                book, null, book.reads[index], "Edit this read", "Save",
+                onDelete = { editing = null; onDeleteRead(index) },
+            ) { onEditRead(index, it); editing = null }
         }
         return
     }
@@ -682,7 +800,12 @@ private fun BookDetails(
         Cover(book, Modifier.width(128.dp).shadow(24.dp, RoundedCornerShape(6.dp)), corner = 6)
         Spacer(Modifier.height(24.dp))
         Text(
-            if (book.finished) "FINISHED" else "TO READ",
+            when {
+                book.finished && book.reads.size > 1 -> "FINISHED · READ ${book.reads.size}×"
+                book.finished -> "FINISHED"
+                book.rereading -> "REREADING"
+                else -> "TO READ"
+            },
             style = MaterialTheme.typography.labelSmall,
             color = colors.onSurfaceVariant,
         )
@@ -695,18 +818,24 @@ private fun BookDetails(
             textAlign = TextAlign.Center,
             modifier = Modifier.padding(top = 4.dp),
         )
-        if (book.finished && book.rating != null) {
-            Spacer(Modifier.height(14.dp))
-            Stars(book.rating, size = 20.sp)
+
+        if (book.reads.isNotEmpty()) {
+            Spacer(Modifier.height(28.dp))
+            Text(
+                if (book.reads.size == 1) "YOUR READ" else "YOUR READS",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            // Newest first; each one opens for editing.
+            book.reads.withIndex().reversed().forEach { (index, read) ->
+                HorizontalDivider(Modifier.padding(top = 12.dp), color = colors.outline)
+                ReadRow(read) { editing = index }
+            }
         }
-        if (book.finished && book.review != null) Text(
-            book.review,
-            style = MaterialTheme.typography.bodyLarge,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(top = 14.dp),
-        )
+
         Spacer(Modifier.height(28.dp))
-        if (book.finished) OutlinePill("Move back to To read", onUnfinish, Modifier.fillMaxWidth())
+        if (book.finished) PillButton("Read it again", onReread, Modifier.fillMaxWidth())
         else PillButton("Finished it", { finishing = true }, Modifier.fillMaxWidth())
         TextButton(
             onClick = { if (confirmRemove) onRemove() else confirmRemove = true },
@@ -719,5 +848,23 @@ private fun BookDetails(
                 color = if (confirmRemove) colors.error else colors.onSurfaceVariant,
             )
         }
+    }
+}
+
+@Composable
+private fun ReadRow(read: Read, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Row(
+        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(top = 12.dp),
+        verticalAlignment = Alignment.Top,
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(read.finishedOn.pretty(), style = MaterialTheme.typography.labelLarge)
+                if (read.rating != null) Stars(read.rating, size = 13.sp)
+            }
+            if (read.review != null) Text(read.review, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
+        }
+        Text("Edit", style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 12.dp))
     }
 }

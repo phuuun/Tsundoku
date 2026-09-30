@@ -51,6 +51,7 @@ kotlin {
             implementation(libs.ktor.client.core)
             implementation(libs.kotlinx.serialization.json)
             implementation(libs.kotlinx.io)
+            implementation(libs.kotlinx.datetime)
 
             implementation(libs.coil.compose)
             implementation(libs.coil.network.ktor)
