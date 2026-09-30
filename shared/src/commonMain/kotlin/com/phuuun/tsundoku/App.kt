@@ -29,9 +29,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.foundation.pager.rememberPagerState
@@ -80,6 +82,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.Canvas
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.ui.geometry.Offset
+import io.github.vinceglb.filekit.dialogs.FileKitDialogSettings
+import io.github.vinceglb.filekit.dialogs.compose.rememberFilePickerLauncher
+import io.github.vinceglb.filekit.dialogs.compose.rememberFileSaverLauncher
+import io.github.vinceglb.filekit.readString
+import io.github.vinceglb.filekit.write
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
@@ -126,10 +142,39 @@ private fun Shelves(library: Library) {
     val haptics = LocalHapticFeedback.current
     var adding by remember { mutableStateOf(false) }
     var openIsbn by remember { mutableStateOf<String?>(null) }
+    var importing by remember { mutableStateOf<Incoming?>(null) }
+    var problem by remember { mutableStateOf<String?>(null) }
+
+    // Export: the system's "save as" screen (Downloads, Drive, ...), then the whole library goes into that file.
+    val saver = rememberFileSaverLauncher(FileKitDialogSettings.createDefault(), onError = { problem = "Couldn't save the backup." }) { file ->
+        if (file != null) scope.launch {
+            try {
+                file.write(library.exportBackup().encodeToByteArray())
+            } catch (e: Exception) {
+                problem = "Couldn't save the backup."
+            }
+        }
+    }
+    // Import: any file type, since some file managers don't tag .json; the contents decide.
+    val picker = rememberFilePickerLauncher(onError = { problem = "Couldn't open that file." }) { file ->
+        if (file != null) scope.launch {
+            try {
+                importing = readImport(file.readString()).takeIf { it.backup.books.isNotEmpty() }
+                if (importing == null) problem = "There are no books in that file."
+            } catch (e: Exception) {
+                problem = "That file isn't a Tsundoku backup or a Goodreads or StoryGraph export."
+            }
+        }
+    }
 
     Box(Modifier.fillMaxSize().background(colors.background)) {
         Column(Modifier.fillMaxSize()) {
-            Header(pager) { scope.launch { pager.animateScrollToPage(it) } }
+            Header(
+                pager,
+                onSelect = { scope.launch { pager.animateScrollToPage(it) } },
+                onExport = { saver.launch(suggestedName = "tsundoku-${today()}", defaultExtension = "json") },
+                onImport = { picker.launch() },
+            )
             HorizontalPager(pager, Modifier.weight(1f)) { page ->
                 val shelf =
                     if (page == 0) library.books.filter { !it.finished }
@@ -172,6 +217,25 @@ private fun Shelves(library: Library) {
         }
     }
 
+    importing?.let { incoming ->
+        ModalBottomSheet(onDismissRequest = { importing = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = colors.surfaceContainerLow, dragHandle = null) {
+            DragHandle()
+            ImportReview(incoming, library) { replace ->
+                library.import(incoming.backup, replace)
+                importing = null
+                haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+            }
+        }
+    }
+    problem?.let {
+        AlertDialog(
+            onDismissRequest = { problem = null },
+            containerColor = colors.surfaceContainerHigh,
+            text = { Text(it) },
+            confirmButton = { TextButton({ problem = null }) { Text("OK", color = colors.onSurface) } },
+        )
+    }
+
     // Looked up live, so editing a read inside the sheet shows straight away.
     library.books.find { it.isbn == openIsbn }?.let { book ->
         ModalBottomSheet(onDismissRequest = { openIsbn = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = colors.surfaceContainerLow, dragHandle = null) {
@@ -191,6 +255,8 @@ private fun Shelves(library: Library) {
                     scope.launch { pager.animateScrollToPage(0) }
                 },
                 onEditRead = { index, read -> library.editRead(book, index, read) },
+                onAddRead = { read -> library.addRead(book, read) },
+                onEditDetails = { title, author, photo, removePhoto -> library.editDetails(book, title, author, photo, removePhoto) },
                 onDeleteRead = { index ->
                     library.deleteRead(book, index)
                     // Deleting the only read sends the book back to To read; follow it there.
@@ -208,18 +274,21 @@ private fun Shelves(library: Library) {
     }
 }
 
-/** TSUNDOKU eyebrow over the pill switch, both centred. */
+/** TSUNDOKU eyebrow over the pill switch, both centred, with the library menu on the right. */
 @Composable
-private fun Header(pager: PagerState, onSelect: (Int) -> Unit) {
+private fun Header(pager: PagerState, onSelect: (Int) -> Unit, onExport: () -> Unit, onImport: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val position = (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, 1f)
 
     Column(
-        Modifier.fillMaxWidth().statusBarsPadding().padding(top = 20.dp, bottom = 20.dp),
+        Modifier.fillMaxWidth().statusBarsPadding().padding(top = 12.dp, bottom = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("TSUNDOKU", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
-        Spacer(Modifier.height(16.dp))
+        Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp), contentAlignment = Alignment.Center) {
+            Text("TSUNDOKU", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+            Box(Modifier.align(Alignment.CenterEnd)) { LibraryMenu(onExport, onImport) }
+        }
+        Spacer(Modifier.height(10.dp))
 
         // Pill switch: the white pill slides with your finger, not after the swipe ends.
         Box(
@@ -249,6 +318,131 @@ private fun Header(pager: PagerState, onSelect: (Int) -> Unit) {
             }
         }
     }
+}
+
+/** The round ⋯ button top right: export and import the library. The Instagram card can go here later. */
+@Composable
+private fun LibraryMenu(onExport: () -> Unit, onImport: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    var open by remember { mutableStateOf(false) }
+    Box {
+        Box(
+            Modifier.size(36.dp).clip(CircleShape).border(1.dp, colors.outline, CircleShape).clickable { open = true },
+            contentAlignment = Alignment.Center,
+        ) {
+            Canvas(Modifier.size(width = 16.dp, height = 4.dp)) {
+                val r = size.height / 2
+                listOf(r, size.width / 2, size.width - r).forEach { x -> drawCircle(colors.onSurface, r, Offset(x, r)) }
+            }
+        }
+        DropdownMenu(
+            expanded = open,
+            onDismissRequest = { open = false },
+            shape = RoundedCornerShape(14.dp),
+            containerColor = colors.surfaceContainerHigh,
+        ) {
+            DropdownMenuItem(text = { Text("Export library") }, onClick = { open = false; onExport() })
+            DropdownMenuItem(
+                text = {
+                    Column {
+                        Text("Import library")
+                        Text("Backup, Goodreads or StoryGraph", style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
+                    }
+                },
+                onClick = { open = false; onImport() },
+            )
+        }
+    }
+}
+
+/**
+ * What's in the file, and for every book you already have: keep yours or take the file's. Tap a row to flip it; the two
+ * buttons flip them all.
+ */
+@Composable
+private fun ImportReview(incoming: Incoming, library: Library, onImport: (replace: Set<String>) -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val books = remember(incoming) { incoming.backup.books.distinctBy { it.isbn } }
+    val clashes = remember(incoming) { books.mapNotNull { theirs -> library.books.find { it.isbn == theirs.isbn }?.let { it to theirs } } }
+    var replace by remember(incoming) { mutableStateOf(emptySet<String>()) }
+    val added = books.size - clashes.size
+
+    Column(Modifier.navigationBarsPadding().padding(start = 24.dp, end = 24.dp, bottom = 24.dp)) {
+        Text("IMPORT FROM ${incoming.source.uppercase()}", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
+        Spacer(Modifier.height(10.dp))
+        Text(if (books.size == 1) "1 book" else "${books.size} books", style = MaterialTheme.typography.headlineSmall)
+        Text(
+            when {
+                clashes.isEmpty() -> "They'll all be added to your shelf."
+                clashes.size == 1 -> "1 is already on your shelf. Keep yours, or replace it with this one?"
+                else -> "${clashes.size} are already on your shelf. Keep yours, or replace them with these?"
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = colors.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp),
+        )
+
+        if (clashes.isNotEmpty()) {
+            Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                OutlinePill("Keep all mine", { replace = emptySet() }, Modifier.weight(1f))
+                OutlinePill("Replace all", { replace = clashes.map { it.first.isbn }.toSet() }, Modifier.weight(1f))
+            }
+            LazyColumn(Modifier.weight(1f, fill = false).padding(top = 8.dp)) {
+                items(clashes, key = { it.first.isbn }) { (mine, theirs) ->
+                    val swap = mine.isbn in replace
+                    HorizontalDivider(color = colors.outline)
+                    Row(
+                        Modifier.fillMaxWidth()
+                            .clickable { replace = if (swap) replace - mine.isbn else replace + mine.isbn }
+                            .padding(vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    ) {
+                        Cover(mine, Modifier.width(40.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(mine.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("Yours: ${mine.status()}", style = MaterialTheme.typography.bodyMedium, color = if (swap) colors.onSurfaceVariant else colors.onSurface)
+                            Text("File: ${theirs.status()}", style = MaterialTheme.typography.bodyMedium, color = if (swap) colors.onSurface else colors.onSurfaceVariant)
+                        }
+                        Text(
+                            if (swap) "REPLACE" else "KEEP MINE",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (swap) colors.onPrimary else colors.onSurface,
+                            modifier = Modifier
+                                .background(if (swap) colors.primary else Color.Transparent, CircleShape)
+                                .border(1.dp, if (swap) colors.primary else colors.outlineVariant, CircleShape)
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
+        val swapped = replace.size
+        PillButton(
+            when {
+                added > 0 && swapped > 0 -> "Add $added, replace $swapped"
+                added > 0 -> if (added == 1) "Add 1 book" else "Add $added books"
+                swapped > 0 -> "Replace $swapped"
+                else -> "Nothing to import"
+            },
+            { onImport(replace) },
+            Modifier.fillMaxWidth(),
+            enabled = added + swapped > 0,
+        )
+    }
+}
+
+/** "Finished · 5★ · 2 reads", "Rereading", "To read" */
+private fun Book.status() = when {
+    finished -> buildString {
+        append("Finished")
+        lastRead?.rating?.let { append(" · $it★") }
+        if (reads.size > 1) append(" · ${reads.size} reads")
+    }
+    rereading -> "Rereading"
+    else -> "To read"
 }
 
 @Composable
@@ -429,12 +623,6 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
     var photo by remember { mutableStateOf<ByteArray?>(null) }
     val focusManager = LocalFocusManager.current
 
-    var shooting by remember { mutableStateOf(false) }
-    if (shooting) CoverCamera { cover ->
-        shooting = false
-        if (cover != null) photo = cover
-    }
-
     fun add(finished: Boolean, read: Read? = null) {
         library.add(book.copy(title = book.title.trim(), author = book.author.trim(), finished = finished, reads = listOfNotNull(read)), photo)
         onAdded(finished)
@@ -553,15 +741,12 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
                     Step.Manual -> {
                         Text("Type it in", style = MaterialTheme.typography.headlineSmall)
                         Text(
-                            "Open Library doesn't know this one. Tap the cover to take a photo of it.",
+                            "Open Library doesn't know this one. Tap the cover to add a picture of it.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = colors.onSurfaceVariant,
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            Box(
-                                Modifier.width(84.dp).clip(RoundedCornerShape(4.dp)).clickable { shooting = true },
-                                contentAlignment = Alignment.Center,
-                            ) {
+                            CoverPicker(Modifier.width(84.dp), onCover = { photo = it }) {
                                 val shot = photo
                                 if (shot != null) Cover(book, Modifier.fillMaxWidth(), photo = shot)
                                 else Box(
@@ -760,6 +945,9 @@ private fun CameraOff(permission: CameraPermissionState) {
     }
 }
 
+/** Title, author and cover as they are while you edit; saved only when you tap Save. */
+private data class Draft(val title: String, val author: String, val photo: ByteArray? = null, val removePhoto: Boolean = false)
+
 @Composable
 private fun BookDetails(
     book: Book,
@@ -767,11 +955,15 @@ private fun BookDetails(
     onReread: () -> Unit,
     onEditRead: (index: Int, Read) -> Unit,
     onDeleteRead: (index: Int) -> Unit,
+    onAddRead: (Read) -> Unit,
+    onEditDetails: (title: String, author: String, photo: ByteArray?, removePhoto: Boolean) -> Unit,
     onRemove: () -> Unit,
 ) {
     val colors = MaterialTheme.colorScheme
     var finishing by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<Int?>(null) }
+    var editingRead by remember { mutableStateOf<Int?>(null) }
+    var addingRead by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf<Draft?>(null) } // non-null while the pen's edit mode is on
     var confirmRemove by remember { mutableStateOf(false) }
 
     val form = Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().imePadding()
@@ -782,12 +974,34 @@ private fun BookDetails(
         }
         return
     }
-    editing?.let { index ->
+    editingRead?.let { index ->
         Box(form) {
             RateBook(
                 book, null, book.reads[index], "Edit this read", "Save",
-                onDelete = { editing = null; onDeleteRead(index) },
-            ) { onEditRead(index, it); editing = null }
+                onDelete = { editingRead = null; onDeleteRead(index) },
+            ) { onEditRead(index, it); editingRead = null }
+        }
+        return
+    }
+    if (addingRead) {
+        Box(form) {
+            RateBook(book, null, Read(today()), "Add a read", "Add read") { onAddRead(it); addingRead = false }
+        }
+        return
+    }
+    draft?.let {
+        Box(form) {
+            EditBook(
+                book, it,
+                onChange = { draft = it },
+                onEditRead = { index -> editingRead = index },
+                onAddRead = { addingRead = true },
+                onCancel = { draft = null },
+                onSave = {
+                    onEditDetails(it.title.trim().ifEmpty { book.title }, it.author.trim(), it.photo, it.removePhoto)
+                    draft = null
+                },
+            )
         }
         return
     }
@@ -797,7 +1011,12 @@ private fun BookDetails(
             .padding(start = 24.dp, end = 24.dp, bottom = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Cover(book, Modifier.width(128.dp).shadow(24.dp, RoundedCornerShape(6.dp)), corner = 6)
+        Box(Modifier.fillMaxWidth()) {
+            Cover(book, Modifier.align(Alignment.TopCenter).width(128.dp).shadow(24.dp, RoundedCornerShape(6.dp)), corner = 6)
+            RoundIconButton(Icons.Outlined.Edit, "Edit book", Modifier.align(Alignment.TopEnd)) {
+                draft = Draft(book.title, book.author)
+            }
+        }
         Spacer(Modifier.height(24.dp))
         Text(
             when {
@@ -827,10 +1046,9 @@ private fun BookDetails(
                 color = colors.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth(),
             )
-            // Newest first; each one opens for editing.
-            book.reads.withIndex().reversed().forEach { (index, read) ->
+            book.reads.reversed().forEach { read ->
                 HorizontalDivider(Modifier.padding(top = 12.dp), color = colors.outline)
-                ReadRow(read) { editing = index }
+                ReadRow(read)
             }
         }
 
@@ -851,11 +1069,81 @@ private fun BookDetails(
     }
 }
 
+/** The pen's edit mode: cover, title and author (saved with Save), and every read (each saved on its own). */
 @Composable
-private fun ReadRow(read: Read, onClick: () -> Unit) {
+private fun EditBook(
+    book: Book,
+    draft: Draft,
+    onChange: (Draft) -> Unit,
+    onEditRead: (index: Int) -> Unit,
+    onAddRead: () -> Unit,
+    onCancel: () -> Unit,
+    onSave: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
+    // What the cover will be after Save.
+    val preview = if (draft.removePhoto) book.copy(coverFile = null) else book
+    val hasPhoto = draft.photo != null || (book.coverFile != null && !draft.removePhoto)
+
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("EDIT BOOK", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f))
+            TextButton(onCancel) { Text("Cancel", color = colors.onSurfaceVariant) }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                CoverPicker(Modifier.width(84.dp), onCover = { onChange(draft.copy(photo = it, removePhoto = false)) }) {
+                    Cover(preview, Modifier.fillMaxWidth(), photo = draft.photo)
+                }
+                Text(
+                    "TAP TO CHANGE",
+                    style = MaterialTheme.typography.labelSmall,
+                    fontSize = 9.sp,
+                    color = colors.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 6.dp),
+                )
+            }
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Field(draft.title, { onChange(draft.copy(title = it)) }, "Title")
+                Field(draft.author, { onChange(draft.copy(author = it)) }, "Author")
+                if (hasPhoto) TextButton({ onChange(draft.copy(photo = null, removePhoto = true)) }) {
+                    Text(
+                        if (book.coverUrl != null) "Use the Open Library cover" else "Remove photo",
+                        color = colors.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        Text("YOUR READS", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
+        // Newest first; tap one to change its date, stars or review, or to delete it.
+        book.reads.withIndex().reversed().forEach { (index, read) ->
+            HorizontalDivider(color = colors.outline)
+            ReadRow(read) { onEditRead(index) }
+        }
+        OutlinePill("Add a read", onAddRead, Modifier.fillMaxWidth())
+        PillButton("Save", onSave, Modifier.fillMaxWidth(), enabled = draft.title.isNotBlank())
+    }
+}
+
+/** Same round outline as the ⋯ button in the header. */
+@Composable
+private fun RoundIconButton(icon: ImageVector, label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Box(
+        modifier.size(36.dp).clip(CircleShape).border(1.dp, colors.outline, CircleShape).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, contentDescription = label, tint = colors.onSurface, modifier = Modifier.size(18.dp))
+    }
+}
+
+/** One read; tappable with an "Edit" on the right only in edit mode. */
+@Composable
+private fun ReadRow(read: Read, onClick: (() -> Unit)? = null) {
     val colors = MaterialTheme.colorScheme
     Row(
-        Modifier.fillMaxWidth().clickable(onClick = onClick).padding(top = 12.dp),
+        Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(top = 12.dp),
         verticalAlignment = Alignment.Top,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -865,6 +1153,6 @@ private fun ReadRow(read: Read, onClick: () -> Unit) {
             }
             if (read.review != null) Text(read.review, style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
         }
-        Text("Edit", style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 12.dp))
+        if (onClick != null) Text("Edit", style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant, modifier = Modifier.padding(start = 12.dp))
     }
 }

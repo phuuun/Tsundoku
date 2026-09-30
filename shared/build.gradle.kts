@@ -45,6 +45,7 @@ kotlin {
             implementation(libs.compose.runtime)
             implementation(libs.compose.foundation)
             implementation(libs.compose.material3)
+            implementation(libs.compose.material.icons.core)
             implementation(libs.compose.ui)
             implementation(libs.compose.uiToolingPreview)
 
@@ -57,6 +58,7 @@ kotlin {
             implementation(libs.coil.network.ktor)
             implementation(libs.easyqrscan)
             implementation(libs.filekit.core)
+            implementation(libs.filekit.dialogs.compose)
             implementation(libs.camerak)
         }
         commonTest.dependencies {

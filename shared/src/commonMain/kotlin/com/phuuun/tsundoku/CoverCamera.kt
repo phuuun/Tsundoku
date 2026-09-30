@@ -19,7 +19,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,6 +35,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -55,6 +59,9 @@ import com.kashif.cameraK.state.CameraKState
 import io.github.vinceglb.filekit.FileKit
 import io.github.vinceglb.filekit.ImageFormat
 import io.github.vinceglb.filekit.compressImage
+import io.github.vinceglb.filekit.dialogs.FileKitType
+import io.github.vinceglb.filekit.dialogs.compose.rememberFilePickerLauncher
+import io.github.vinceglb.filekit.readBytes
 import kotlinx.coroutines.launch
 import kotlinx.io.buffered
 import kotlinx.io.files.Path as FilePath
@@ -72,6 +79,35 @@ private val CoverFrame = Rect(left = 0.1f, top = 0.05f, right = 0.9f, bottom = 0
 
 /** Crops a JPEG to [frame] (fractions of its width and height) and re-encodes it. */
 expect fun cropJpeg(bytes: ByteArray, frame: Rect, quality: Int): ByteArray
+
+/**
+ * A tappable cover: asks "Take a photo" (the framed camera) or "Choose from gallery", and hands back the cover as a
+ * JPEG of at most 800 × 1200. A gallery image isn't cropped; the cover view crops it to shape.
+ */
+@Composable
+fun CoverPicker(modifier: Modifier, onCover: (ByteArray) -> Unit, content: @Composable () -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    val scope = rememberCoroutineScope()
+    var menu by remember { mutableStateOf(false) }
+    var shooting by remember { mutableStateOf(false) }
+    if (shooting) CoverCamera { cover ->
+        shooting = false
+        cover?.let(onCover)
+    }
+    val gallery = rememberFilePickerLauncher(type = FileKitType.Image) { file ->
+        if (file != null) scope.launch {
+            runCatching { FileKit.compressImage(file.readBytes(), ImageFormat.JPEG, quality = 80, maxWidth = 800, maxHeight = 1200) }
+                .onSuccess(onCover) // an image it can't decode just leaves the cover as it was
+        }
+    }
+    Box(modifier.clip(RoundedCornerShape(4.dp)).clickable { menu = true }) {
+        content()
+        DropdownMenu(menu, { menu = false }, shape = RoundedCornerShape(14.dp), containerColor = colors.surfaceContainerHigh) {
+            DropdownMenuItem(text = { Text("Take a photo") }, onClick = { menu = false; shooting = true })
+            DropdownMenuItem(text = { Text("Choose from gallery") }, onClick = { menu = false; gallery.launch() })
+        }
+    }
+}
 
 /** Full-screen camera with the cover frame; hands back the cropped JPEG, or nothing if you cancel. */
 @Composable

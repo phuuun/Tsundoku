@@ -1,6 +1,8 @@
 package com.phuuun.tsundoku
 
 import kotlinx.datetime.LocalDate
+import kotlinx.io.buffered
+import kotlinx.io.readByteArray
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.files.SystemTemporaryDirectory
@@ -68,5 +70,62 @@ class LibraryTest {
         assertEquals(5, redRising.reads.single().rating)
         assertEquals(2026, redRising.reads.single().finishedOn.year)
         assertEquals(emptyList(), books[2].reads)
+    }
+
+    @Test
+    fun backupRestoresEverythingOnAnotherPhone() {
+        val old = Library(tempDir())
+        old.add(Book("1", "Photo one", "", finished = true, reads = listOf(Read(LocalDate(2025, 1, 2), 5, "Yes"))), photo = byteArrayOf(9, 8, 7))
+        old.add(Book("2", "Plain", "", coverUrl = "https://covers.openlibrary.org/b/id/1-L.jpg"))
+        val file = old.exportBackup()
+
+        val fresh = Library(tempDir())
+        fresh.add(Book("2", "Stale copy", ""))
+        fresh.import(readBackup(file), replace = setOf("2"))
+
+        assertEquals(old.books.toList(), fresh.books.toList()) // same order, and "2" replaced by the backup's version
+        val photo = Path(fresh.dir, assertNotNull(fresh.books.first { it.isbn == "1" }.coverFile))
+        assertEquals(listOf<Byte>(9, 8, 7), SystemFileSystem.source(photo).buffered().use { it.readByteArray() }.toList())
+    }
+
+    @Test
+    fun backupCannotWriteOutsideCovers() {
+        val dir = tempDir()
+        val evil = """{"books":[{"isbn":"1","title":"x","author":"","coverFile":"../books.json"}],"photos":{"../books.json":"AAAA"}}"""
+        val library = Library(dir)
+        library.import(readBackup(evil), replace = emptySet())
+        assertEquals(null, library.books.single().coverFile)
+        assertEquals("x", Library(dir).books.single().title) // books.json wasn't overwritten by the "photo"
+    }
+
+    @Test
+    fun importKeepsMineUnlessChosen() {
+        val library = Library(tempDir())
+        library.add(Book("a", "Mine A", ""))
+        library.add(Book("b", "Mine B", ""))
+        val backup = Backup(listOf(Book("a", "Theirs A", ""), Book("b", "Theirs B", ""), Book("c", "New C", "")))
+
+        library.import(backup, replace = setOf("b"))
+
+        assertEquals(setOf("Mine A", "Theirs B", "New C"), library.books.map { it.title }.toSet())
+    }
+
+    @Test
+    fun editingSwapsThePhotoAndAddingAReadKeepsTheShelf() {
+        val library = Library(tempDir())
+        library.add(Book("1", "Titel", "Autor"), photo = byteArrayOf(1))
+        val oldPhoto = Path(library.dir, assertNotNull(library.books.single().coverFile))
+
+        library.editDetails(library.books.single(), "Title", "Author", photo = byteArrayOf(2), removePhoto = false)
+        val book = library.books.single()
+        assertEquals("Title" to "Author", book.title to book.author)
+        assertFalse(SystemFileSystem.exists(oldPhoto)) // the replaced photo doesn't linger
+        assertTrue(SystemFileSystem.exists(Path(library.dir, assertNotNull(book.coverFile))))
+
+        library.addRead(book, Read(LocalDate(2019, 5, 1), 4))
+        assertTrue(library.books.single().rereading) // a past read on a To read book: it's a reread now
+
+        library.editDetails(library.books.single(), "Title", "Author", photo = null, removePhoto = true)
+        assertEquals(null, library.books.single().coverFile)
     }
 }

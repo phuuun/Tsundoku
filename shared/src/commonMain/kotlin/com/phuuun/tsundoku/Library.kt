@@ -8,6 +8,7 @@ import kotlinx.datetime.toLocalDateTime
 import kotlinx.io.buffered
 import kotlinx.io.files.Path
 import kotlinx.io.files.SystemFileSystem
+import kotlinx.io.readByteArray
 import kotlinx.io.readString
 import kotlinx.io.writeString
 import kotlinx.serialization.Serializable
@@ -23,6 +24,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
+import kotlin.io.encoding.Base64
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -69,15 +71,27 @@ class Library(val dir: String) {
 
     /** [photo] is a JPEG of the cover; it's written to `covers/` and wins over [Book.coverUrl]. */
     fun add(book: Book, photo: ByteArray? = null) {
-        val coverFile = photo?.let {
-            // Timestamped so re-adding a book with a new photo never shows the old one from Coil's cache.
-            val name = "covers/${book.isbn}-${nowMillis()}.jpg"
-            SystemFileSystem.createDirectories(Path(dir, "covers"))
-            SystemFileSystem.sink(Path(dir, name)).buffered().use { sink -> sink.write(it) }
-            name
-        }
-        books.add(0, book.copy(coverFile = coverFile ?: book.coverFile))
+        books.add(0, book.copy(coverFile = photo?.let { writePhoto(book.isbn, it) } ?: book.coverFile))
         save()
+    }
+
+    /** New title and author; [photo] replaces the cover photo, [removePhoto] drops it for the Open Library cover. */
+    fun editDetails(book: Book, title: String, author: String, photo: ByteArray?, removePhoto: Boolean) {
+        val coverFile = when {
+            photo != null -> writePhoto(book.isbn, photo)
+            removePhoto -> null
+            else -> book.coverFile
+        }
+        if (coverFile != book.coverFile) book.coverFile?.let { SystemFileSystem.delete(Path(dir, it), mustExist = false) }
+        put(book.copy(title = title, author = author, coverFile = coverFile), toTop = false)
+    }
+
+    // Timestamped so a new photo of the same book never shows the old one from Coil's cache.
+    private fun writePhoto(isbn: String, jpeg: ByteArray): String {
+        val name = "covers/$isbn-${nowMillis()}.jpg"
+        SystemFileSystem.createDirectories(Path(dir, "covers"))
+        SystemFileSystem.sink(Path(dir, name)).buffered().use { it.write(jpeg) }
+        return name
     }
 
     fun remove(book: Book) {
@@ -90,6 +104,9 @@ class Library(val dir: String) {
 
     /** Back to To read, keeping every past read. */
     fun reread(book: Book) = put(book.copy(finished = false))
+
+    /** A past read, e.g. from years ago. It doesn't move the book: one on To read becomes a reread. */
+    fun addRead(book: Book, read: Read) = put(book.copy(reads = book.reads + read), toTop = false)
 
     /** [index] is the read's position in [Book.reads]. */
     fun editRead(book: Book, index: Int, read: Read) =
@@ -114,6 +131,43 @@ class Library(val dir: String) {
         save()
     }
 
+    /** The whole library as one JSON file, cover photos included. */
+    fun exportBackup(): String = Json.encodeToString(
+        Backup(
+            books = books.toList(),
+            photos = books.mapNotNull { book ->
+                book.coverFile?.let { name ->
+                    Path(dir, name).takeIf { SystemFileSystem.exists(it) }
+                        ?.let { name to Base64.encode(SystemFileSystem.source(it).buffered().use { src -> src.readByteArray() }) }
+                }
+            }.toMap(),
+        )
+    )
+
+    /**
+     * Puts the backup's new books on top. A book already here (same ISBN) is swapped for the backup's version only if
+     * its ISBN is in [replace]; otherwise yours stays as it is.
+     */
+    fun import(backup: Backup, replace: Set<String>) {
+        val incoming = backup.books.distinctBy { it.isbn }.filter { !has(it.isbn) || it.isbn in replace }.map { book ->
+            val name = book.coverFile
+            val photo = name?.let { backup.photos[it] }
+            if (name != null && photo != null && SafeCoverName.matches(name)) {
+                SystemFileSystem.createDirectories(Path(dir, "covers"))
+                SystemFileSystem.sink(Path(dir, name)).buffered().use { it.write(Base64.decode(photo)) }
+                book
+            } else {
+                book.copy(coverFile = null) // falls back to the Open Library cover
+            }
+        }
+        val replaced = books.filter { old -> incoming.any { it.isbn == old.isbn } }
+        replaced.mapNotNull { it.coverFile }.filter { file -> incoming.none { it.coverFile == file } }
+            .forEach { SystemFileSystem.delete(Path(dir, it), mustExist = false) }
+        books.removeAll(replaced)
+        books.addAll(0, incoming)
+        save()
+    }
+
     // Write to a temp file and swap it in, so a crash mid-write can't wipe the library.
     private fun save() {
         val tmp = Path("$file.tmp")
@@ -121,6 +175,16 @@ class Library(val dir: String) {
         SystemFileSystem.atomicMove(tmp, file)
     }
 }
+
+/** What Export writes. [photos] maps each [Book.coverFile] to its JPEG in Base64, so one file is the whole library. */
+@Serializable
+class Backup(val books: List<Book>, val photos: Map<String, String> = emptyMap())
+
+/** Throws if [text] isn't a backup. Unknown keys are fine: a backup from a newer version still imports. */
+fun readBackup(text: String): Backup = Json { ignoreUnknownKeys = true }.decodeFromString(text)
+
+// A backup is a file from outside the app: only let it write where Library.add would have.
+private val SafeCoverName = Regex("covers/[0-9A-Za-z-]+\\.jpg")
 
 @OptIn(ExperimentalTime::class)
 fun today(): LocalDate = Clock.System.todayIn(TimeZone.currentSystemDefault())
