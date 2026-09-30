@@ -82,10 +82,18 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.launch
+import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material3.IconButton
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.Icon
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.Canvas
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -142,6 +150,7 @@ private fun Shelves(library: Library) {
     val haptics = LocalHapticFeedback.current
     var adding by remember { mutableStateOf(false) }
     var openIsbn by remember { mutableStateOf<String?>(null) }
+    var query by remember { mutableStateOf("") }
     var importing by remember { mutableStateOf<Incoming?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
 
@@ -175,11 +184,11 @@ private fun Shelves(library: Library) {
                 onExport = { saver.launch(suggestedName = "tsundoku-${today()}", defaultExtension = "json") },
                 onImport = { picker.launch() },
             )
+            SearchField(query, { query = it }, Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp))
             HorizontalPager(pager, Modifier.weight(1f)) { page ->
-                val shelf =
-                    if (page == 0) library.books.filter { !it.finished }
-                    else library.books.filter { it.finished }.sortedByDescending { it.lastRead?.finishedOn }
-                if (shelf.isEmpty()) EmptyShelf(page)
+                // ponytail: filters and sorts the whole shelf on every keystroke; instant for thousands of books, no spinner needed
+                val shelf = library.books.filter { it.finished == (page == 1) && it.matches(query) }.sortedWith(ShelfOrder)
+                if (shelf.isEmpty()) EmptyShelf(page, query)
                 else LazyVerticalGrid(
                     columns = GridCells.Adaptive(100.dp),
                     contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 140.dp),
@@ -257,6 +266,10 @@ private fun Shelves(library: Library) {
                 onEditRead = { index, read -> library.editRead(book, index, read) },
                 onAddRead = { read -> library.addRead(book, read) },
                 onEditDetails = { title, author, photo, removePhoto -> library.editDetails(book, title, author, photo, removePhoto) },
+                onFavorite = {
+                    library.setFavorite(book, !book.favorite)
+                    haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+                },
                 onDeleteRead = { index ->
                     library.deleteRead(book, index)
                     // Deleting the only read sends the book back to To read; follow it there.
@@ -446,21 +459,28 @@ private fun Book.status() = when {
 }
 
 @Composable
-private fun EmptyShelf(page: Int) {
+private fun EmptyShelf(page: Int, query: String) {
     Column(
         Modifier.fillMaxSize().padding(horizontal = 40.dp).padding(bottom = 120.dp),
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            if (page == 0) "NOTHING TO READ" else "NOTHING FINISHED YET",
+            when {
+                query.isNotBlank() -> "NO MATCHES"
+                page == 0 -> "NOTHING TO READ"
+                else -> "NOTHING FINISHED YET"
+            },
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(Modifier.height(10.dp))
         Text(
-            if (page == 0) "Add the book on your nightstand.\nThe ISBN is on the back cover."
-            else "Tap a book when you're done with it\nand it lands here.",
+            when {
+                query.isNotBlank() -> "Nothing on this shelf matches “${query.trim()}”."
+                page == 0 -> "Add the book on your nightstand.\nThe ISBN is on the back cover."
+                else -> "Tap a book when you're done with it\nand it lands here."
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -490,6 +510,10 @@ private fun ShelfBook(book: Book, modifier: Modifier, onClick: () -> Unit) {
                     .background(Color.Black.copy(alpha = 0.75f), CircleShape)
                     .padding(horizontal = 8.dp, vertical = 3.dp),
             )
+            if (book.favorite) Box(
+                Modifier.align(Alignment.TopEnd).padding(6.dp).size(22.dp).background(Color.Black.copy(alpha = 0.75f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) { StarShape(filled = true, color = Color.White, modifier = Modifier.size(12.dp)) }
         }
         Text(
             book.title,
@@ -956,6 +980,7 @@ private fun BookDetails(
     onEditRead: (index: Int, Read) -> Unit,
     onDeleteRead: (index: Int) -> Unit,
     onAddRead: (Read) -> Unit,
+    onFavorite: () -> Unit,
     onEditDetails: (title: String, author: String, photo: ByteArray?, removePhoto: Boolean) -> Unit,
     onRemove: () -> Unit,
 ) {
@@ -1013,8 +1038,11 @@ private fun BookDetails(
     ) {
         Box(Modifier.fillMaxWidth()) {
             Cover(book, Modifier.align(Alignment.TopCenter).width(128.dp).shadow(24.dp, RoundedCornerShape(6.dp)), corner = 6)
-            RoundIconButton(Icons.Outlined.Edit, "Edit book", Modifier.align(Alignment.TopEnd)) {
-                draft = Draft(book.title, book.author)
+            RoundButton(if (book.favorite) "Unfavorite" else "Favorite", Modifier.align(Alignment.TopStart), onClick = onFavorite) {
+                StarShape(filled = book.favorite, color = colors.onSurface, modifier = Modifier.size(17.dp))
+            }
+            RoundButton("Edit book", Modifier.align(Alignment.TopEnd), onClick = { draft = Draft(book.title, book.author) }) {
+                Icon(Icons.Outlined.Edit, contentDescription = null, tint = colors.onSurface, modifier = Modifier.size(18.dp))
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -1128,14 +1156,58 @@ private fun EditBook(
 
 /** Same round outline as the ⋯ button in the header. */
 @Composable
-private fun RoundIconButton(icon: ImageVector, label: String, modifier: Modifier = Modifier, onClick: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
+private fun RoundButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit, content: @Composable () -> Unit) {
     Box(
-        modifier.size(36.dp).clip(CircleShape).border(1.dp, colors.outline, CircleShape).clickable(onClick = onClick),
+        modifier.size(36.dp).clip(CircleShape).border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
+            .clickable(onClickLabel = label, onClick = onClick),
         contentAlignment = Alignment.Center,
-    ) {
-        Icon(icon, contentDescription = label, tint = colors.onSurface, modifier = Modifier.size(18.dp))
+    ) { content() }
+}
+
+/** A five-point star, outlined or filled (the icon pack's outline star isn't in the core set). */
+@Composable
+private fun StarShape(filled: Boolean, color: Color, modifier: Modifier) {
+    Canvas(modifier) {
+        val star = Path().apply {
+            val outer = size.minDimension / 2
+            for (i in 0 until 10) {
+                val radius = if (i % 2 == 0) outer else outer * 0.45f
+                val angle = -PI / 2 + i * PI / 5
+                val x = center.x + radius * cos(angle).toFloat()
+                val y = center.y + radius * sin(angle).toFloat()
+                if (i == 0) moveTo(x, y) else lineTo(x, y)
+            }
+            close()
+        }
+        if (filled) drawPath(star, color)
+        else drawPath(star, color, style = Stroke(1.5.dp.toPx(), join = StrokeJoin.Round))
     }
+}
+
+/** Filters as you type, no enter needed; the keyboard's search key just puts the keyboard away. */
+@Composable
+private fun SearchField(query: String, onQuery: (String) -> Unit, modifier: Modifier = Modifier) {
+    val colors = MaterialTheme.colorScheme
+    val focusManager = LocalFocusManager.current
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQuery,
+        placeholder = { Text("Search title or author", color = colors.onSurfaceVariant) },
+        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(20.dp)) },
+        trailingIcon = if (query.isEmpty()) null else {
+            { IconButton({ onQuery(""); focusManager.clearFocus() }) { Icon(Icons.Outlined.Close, "Clear search", tint = colors.onSurfaceVariant) } }
+        },
+        singleLine = true,
+        shape = CircleShape,
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedBorderColor = colors.outline,
+            focusedBorderColor = colors.onSurfaceVariant,
+            cursorColor = colors.onSurface,
+        ),
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+        modifier = modifier.fillMaxWidth(),
+    )
 }
 
 /** One read; tappable with an "Edit" on the right only in edit mode. */

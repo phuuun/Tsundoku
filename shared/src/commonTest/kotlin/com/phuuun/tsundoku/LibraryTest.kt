@@ -128,4 +128,30 @@ class LibraryTest {
         library.editDetails(library.books.single(), "Title", "Author", photo = null, removePhoto = true)
         assertEquals(null, library.books.single().coverFile)
     }
+
+    @Test
+    fun favoritesFirstThenByAuthorThenTitle() {
+        val books = listOf(
+            Book("1", "Morning Star", "Pierce Brown"),
+            Book("2", "No author", ""),
+            Book("3", "Laut Bercerita", "Leila S. Chudori"),
+            Book("4", "Golden Son", "Pierce Brown"),
+            Book("5", "Laskar Pelangi", "andrea Hirata"),
+            Book("6", "The Silent Patient", "Alex Michaelides", favorite = true),
+            Book("7", "Red Rising", "Pierce Brown", favorite = true),
+        )
+        assertEquals(
+            listOf("The Silent Patient", "Red Rising", "Laskar Pelangi", "Laut Bercerita", "Golden Son", "Morning Star", "No author"),
+            books.sortedWith(ShelfOrder).map { it.title },
+        )
+    }
+
+    @Test
+    fun searchMatchesEveryWordInTitleOrAuthor() {
+        val book = Book("1", "Red Rising", "Pierce Brown")
+        assertTrue(book.matches("red"))
+        assertTrue(book.matches("  BROWN rising "))
+        assertTrue(book.matches(""))
+        assertFalse(book.matches("red sun"))
+    }
 }

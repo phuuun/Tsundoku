@@ -50,10 +50,22 @@ data class Book(
     val finished: Boolean = false,
     /** Every finished read, oldest first. */
     val reads: List<Read> = emptyList(),
+    /** Starred: always at the top of its shelf. */
+    val favorite: Boolean = false,
 ) {
     val rereading get() = !finished && reads.isNotEmpty()
     val lastRead get() = reads.lastOrNull()
+
+    /** Search: every word typed has to appear in the title or the author, in any order and case. */
+    fun matches(query: String) = query.split(' ').filter { it.isNotBlank() }
+        .all { word -> title.contains(word, ignoreCase = true) || author.contains(word, ignoreCase = true) }
 }
+
+/** Favorites first, then A–Z by author so an author's books sit together, then by title. No author goes last. */
+val ShelfOrder: Comparator<Book> = compareByDescending<Book> { it.favorite }
+    .thenBy { it.author.isBlank() }
+    .thenBy { it.author.lowercase() }
+    .thenBy { it.title.lowercase() }
 
 /** Every book, newest first, saved to `books.json` in [dir]. ISBN is the key. */
 // ponytail: rewrites the whole file on the main thread on every change; fine for thousands of books, move to SQLite if it ever stutters
@@ -101,6 +113,8 @@ class Library(val dir: String) {
     }
 
     fun finish(book: Book, read: Read) = put(book.copy(finished = true, reads = book.reads + read))
+
+    fun setFavorite(book: Book, favorite: Boolean) = put(book.copy(favorite = favorite), toTop = false)
 
     /** Back to To read, keeping every past read. */
     fun reread(book: Book) = put(book.copy(finished = false))
