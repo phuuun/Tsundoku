@@ -1,0 +1,7 @@
+<resources>
+    <!-- Only shows while the app launches; matches the Compose background so there's no flash. -->
+    <style name="Tsundoku" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/background</item>
+    </style>
+    <color name="background">#FFFDF4</color>
+</resources>
