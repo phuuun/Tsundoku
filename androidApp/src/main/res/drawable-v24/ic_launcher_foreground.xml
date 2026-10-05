@@ -1,7 +1,10 @@
-<!-- A little pile of books, the unread kind. -->
+<!-- Three books lying flat: pages on the left, cover on the right. -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
-    <path android:fillColor="#FFFFFF" android:pathData="M33,64h42v9h-42z" />
-    <path android:fillColor="#FFFFFF" android:pathData="M37,53h36v9h-36z" />
-    <path android:fillColor="#FFFFFF" android:pathData="M35,42h34v9h-34z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M31.5,34.5H35V46.5H31.5A1.5,1.5 0 0 1 30,45.0V36.0A1.5,1.5 0 0 1 31.5,34.5Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M36,34.5H76.5A1.5,1.5 0 0 1 78,36.0V45.0A1.5,1.5 0 0 1 76.5,46.5H36Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M31.5,48H35V60H31.5A1.5,1.5 0 0 1 30,58.5V49.5A1.5,1.5 0 0 1 31.5,48Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M36,48H76.5A1.5,1.5 0 0 1 78,49.5V58.5A1.5,1.5 0 0 1 76.5,60H36Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M31.5,61.5H35V73.5H31.5A1.5,1.5 0 0 1 30,72.0V63.0A1.5,1.5 0 0 1 31.5,61.5Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M36,61.5H76.5A1.5,1.5 0 0 1 78,63.0V72.0A1.5,1.5 0 0 1 76.5,73.5H36Z" />
 </vector>

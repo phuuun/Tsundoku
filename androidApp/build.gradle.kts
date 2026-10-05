@@ -25,10 +25,10 @@ android {
         applicationId = "com.phuuun.tsundoku"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 4 // must go up with every release, or Android won't install it as an update
-        versionName = "1.3"
+        versionCode = 5 // must go up with every release, or Android won't install it as an update
+        versionName = "1.4"
     }
-    base.archivesName = "Tsundoku-v${defaultConfig.versionName}" // APK: Tsundoku-v1.3-release.apk
+    base.archivesName = "Tsundoku-v${defaultConfig.versionName}" // APK: Tsundoku-v<versionName>-release.apk
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
