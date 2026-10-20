@@ -77,6 +77,7 @@ class LibraryTest {
         val old = Library(tempDir())
         old.add(Book("1", "Photo one", "", finished = true, reads = listOf(Read(LocalDate(2025, 1, 2), 5, "Yes"))), photo = byteArrayOf(9, 8, 7))
         old.add(Book("2", "Plain", "", coverUrl = "https://covers.openlibrary.org/b/id/1-L.jpg"))
+        old.editDetails(old.books.first(), "Plain", "", null, false, spine = byteArrayOf(4, 5), spineAspect = 0.15f, size = BookSize.Tall)
         val file = old.exportBackup()
 
         val fresh = Library(tempDir())
@@ -86,6 +87,8 @@ class LibraryTest {
         assertEquals(old.books.toList(), fresh.books.toList()) // same order, and "2" replaced by the backup's version
         val photo = Path(fresh.dir, assertNotNull(fresh.books.first { it.isbn == "1" }.coverFile))
         assertEquals(listOf<Byte>(9, 8, 7), SystemFileSystem.source(photo).buffered().use { it.readByteArray() }.toList())
+        val spine = Path(fresh.dir, assertNotNull(fresh.books.first { it.isbn == "2" }.spineFile))
+        assertEquals(listOf<Byte>(4, 5), SystemFileSystem.source(spine).buffered().use { it.readByteArray() }.toList())
     }
 
     @Test
@@ -130,7 +133,7 @@ class LibraryTest {
     }
 
     @Test
-    fun favoritesFirstThenByAuthorThenTitle() {
+    fun favoritesFirstThenBySurnameThenTitle() {
         val books = listOf(
             Book("1", "Morning Star", "Pierce Brown"),
             Book("2", "No author", ""),
@@ -141,7 +144,7 @@ class LibraryTest {
             Book("7", "Red Rising", "Pierce Brown", favorite = true),
         )
         assertEquals(
-            listOf("The Silent Patient", "Red Rising", "Laskar Pelangi", "Laut Bercerita", "Golden Son", "Morning Star", "No author"),
+            listOf("Red Rising", "The Silent Patient", "Golden Son", "Morning Star", "Laut Bercerita", "Laskar Pelangi", "No author"),
             books.sortedWith(ShelfOrder).map { it.title },
         )
     }

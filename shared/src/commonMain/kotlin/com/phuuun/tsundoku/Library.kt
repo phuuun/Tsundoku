@@ -52,8 +52,20 @@ data class Book(
     val reads: List<Read> = emptyList(),
     /** Starred: always at the top of its shelf. */
     val favorite: Boolean = false,
+    /** A photo of the spine, relative to the library folder like [coverFile]. */
+    val spineFile: String? = null,
+    /** The spine photo's width ÷ height, so a fat book stands fat on the shelf. */
+    val spineAspect: Float? = null,
+    /** From Open Library: how thick the spine is when there's no photo of it. */
+    val pages: Int? = null,
+    /** How tall it stands. Null until Open Library has been asked (see [Library.setSize]). */
+    val size: BookSize? = null,
+    /** Face out on the shelf (true) or spine out (false); null lets the shelf pick, see [faceOut]. */
+    val showCover: Boolean? = null,
 ) {
     val rereading get() = !finished && reads.isNotEmpty()
+    /** The last word of the author's name, like a bookshop shelves by. */
+    val surname get() = author.trim().substringAfterLast(' ')
     val lastRead get() = reads.lastOrNull()
 
     /** Search: every word typed has to appear in the title or the author, in any order and case. */
@@ -61,9 +73,14 @@ data class Book(
         .all { word -> title.contains(word, ignoreCase = true) || author.contains(word, ignoreCase = true) }
 }
 
-/** Favorites first, then A–Z by author so an author's books sit together, then by title. No author goes last. */
+/** [height] is a fraction of the tallest book on the shelf. */
+@Serializable
+enum class BookSize(val height: Float) { Pocket(0.8f), Regular(0.9f), Tall(1f) }
+
+/** Favorites first, then A–Z by surname so an author's books sit together, then by title. No author goes last. */
 val ShelfOrder: Comparator<Book> = compareByDescending<Book> { it.favorite }
     .thenBy { it.author.isBlank() }
+    .thenBy { it.surname.lowercase() }
     .thenBy { it.author.lowercase() }
     .thenBy { it.title.lowercase() }
 
@@ -87,20 +104,42 @@ class Library(val dir: String) {
         save()
     }
 
-    /** New title and author; [photo] replaces the cover photo, [removePhoto] drops it for the Open Library cover. */
-    fun editDetails(book: Book, title: String, author: String, photo: ByteArray?, removePhoto: Boolean) {
-        val coverFile = when {
-            photo != null -> writePhoto(book.isbn, photo)
-            removePhoto -> null
-            else -> book.coverFile
-        }
-        if (coverFile != book.coverFile) book.coverFile?.let { SystemFileSystem.delete(Path(dir, it), mustExist = false) }
-        put(book.copy(title = title, author = author, coverFile = coverFile), toTop = false)
+    /**
+     * New title, author and size; [photo] replaces the cover photo, [removePhoto] drops it for the Open Library cover.
+     * [spine] replaces the spine photo ([spineAspect] is its width ÷ height), [removeSpine] drops it for a drawn spine.
+     */
+    fun editDetails(
+        book: Book, title: String, author: String, photo: ByteArray?, removePhoto: Boolean,
+        spine: ByteArray? = null, spineAspect: Float? = null, removeSpine: Boolean = false, size: BookSize? = book.size,
+    ) {
+        val spineFile = swapPhoto(book.spineFile, spine?.let { writePhoto("${book.isbn}-spine", it) }, removeSpine)
+        put(
+            book.copy(
+                title = title, author = author, size = size,
+                coverFile = swapPhoto(book.coverFile, photo?.let { writePhoto(book.isbn, it) }, removePhoto),
+                spineFile = spineFile,
+                spineAspect = if (spineFile == null) null else spineAspect ?: book.spineAspect,
+            ),
+            toTop = false,
+        )
+    }
+
+    /** Page count and size from Open Library. Looked up by ISBN: the book may have changed while it was asking. */
+    fun setSize(isbn: String, pages: Int?, size: BookSize) {
+        val book = books.find { it.isbn == isbn } ?: return
+        put(book.copy(pages = pages ?: book.pages, size = size), toTop = false)
+    }
+
+    /** [new] if there is one, nothing if [remove], else [old]; the file it replaces is deleted. */
+    private fun swapPhoto(old: String?, new: String?, remove: Boolean): String? {
+        val file = new ?: old.takeUnless { remove }
+        if (file != old) old?.let { SystemFileSystem.delete(Path(dir, it), mustExist = false) }
+        return file
     }
 
     // Timestamped so a new photo of the same book never shows the old one from Coil's cache.
-    private fun writePhoto(isbn: String, jpeg: ByteArray): String {
-        val name = "covers/$isbn-${nowMillis()}.jpg"
+    private fun writePhoto(prefix: String, jpeg: ByteArray): String {
+        val name = "covers/$prefix-${nowMillis()}.jpg"
         SystemFileSystem.createDirectories(Path(dir, "covers"))
         SystemFileSystem.sink(Path(dir, name)).buffered().use { it.write(jpeg) }
         return name
@@ -108,13 +147,15 @@ class Library(val dir: String) {
 
     fun remove(book: Book) {
         books.removeAll { it.isbn == book.isbn }
-        book.coverFile?.let { SystemFileSystem.delete(Path(dir, it), mustExist = false) }
+        listOfNotNull(book.coverFile, book.spineFile).forEach { SystemFileSystem.delete(Path(dir, it), mustExist = false) }
         save()
     }
 
     fun finish(book: Book, read: Read) = put(book.copy(finished = true, reads = book.reads + read))
 
     fun setFavorite(book: Book, favorite: Boolean) = put(book.copy(favorite = favorite), toTop = false)
+
+    fun setShowCover(book: Book, showCover: Boolean) = put(book.copy(showCover = showCover), toTop = false)
 
     /** Back to To read, keeping every past read. */
     fun reread(book: Book) = put(book.copy(finished = false))
@@ -149,11 +190,9 @@ class Library(val dir: String) {
     fun exportBackup(): String = Json.encodeToString(
         Backup(
             books = books.toList(),
-            photos = books.mapNotNull { book ->
-                book.coverFile?.let { name ->
-                    Path(dir, name).takeIf { SystemFileSystem.exists(it) }
-                        ?.let { name to Base64.encode(SystemFileSystem.source(it).buffered().use { src -> src.readByteArray() }) }
-                }
+            photos = books.flatMap { listOfNotNull(it.coverFile, it.spineFile) }.mapNotNull { name ->
+                Path(dir, name).takeIf { SystemFileSystem.exists(it) }
+                    ?.let { name to Base64.encode(SystemFileSystem.source(it).buffered().use { src -> src.readByteArray() }) }
             }.toMap(),
         )
     )
@@ -164,22 +203,25 @@ class Library(val dir: String) {
      */
     fun import(backup: Backup, replace: Set<String>) {
         val incoming = backup.books.distinctBy { it.isbn }.filter { !has(it.isbn) || it.isbn in replace }.map { book ->
-            val name = book.coverFile
-            val photo = name?.let { backup.photos[it] }
-            if (name != null && photo != null && SafeCoverName.matches(name)) {
-                SystemFileSystem.createDirectories(Path(dir, "covers"))
-                SystemFileSystem.sink(Path(dir, name)).buffered().use { it.write(Base64.decode(photo)) }
-                book
-            } else {
-                book.copy(coverFile = null) // falls back to the Open Library cover
-            }
+            val spine = restorePhoto(book.spineFile, backup)
+            book.copy(coverFile = restorePhoto(book.coverFile, backup), spineFile = spine, spineAspect = book.spineAspect.takeIf { spine != null })
         }
         val replaced = books.filter { old -> incoming.any { it.isbn == old.isbn } }
-        replaced.mapNotNull { it.coverFile }.filter { file -> incoming.none { it.coverFile == file } }
+        replaced.flatMap { listOfNotNull(it.coverFile, it.spineFile) }
+            .filter { file -> incoming.none { it.coverFile == file || it.spineFile == file } }
             .forEach { SystemFileSystem.delete(Path(dir, it), mustExist = false) }
         books.removeAll(replaced)
         books.addAll(0, incoming)
         save()
+    }
+
+    /** Writes the backup's photo called [name]; null (the Open Library cover, a drawn spine) if it has none or it's unsafe. */
+    private fun restorePhoto(name: String?, backup: Backup): String? {
+        val photo = name?.let { backup.photos[it] } ?: return null
+        if (!SafeCoverName.matches(name)) return null
+        SystemFileSystem.createDirectories(Path(dir, "covers"))
+        SystemFileSystem.sink(Path(dir, name)).buffered().use { it.write(Base64.decode(photo)) }
+        return name
     }
 
     // Write to a temp file and swap it in, so a crash mid-write can't wipe the library.

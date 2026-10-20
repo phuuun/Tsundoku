@@ -44,6 +44,10 @@ android {
         }
     }
     buildTypes {
+        // Installs next to the release app with its own, separate library: test freely, uninstall to throw it away.
+        getByName("debug") {
+            applicationIdSuffix = ".debug"
+        }
         getByName("release") {
             isMinifyEnabled = false
             signingConfig = signingConfigs.findByName("release")

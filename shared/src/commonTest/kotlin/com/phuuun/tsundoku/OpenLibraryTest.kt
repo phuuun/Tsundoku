@@ -23,4 +23,11 @@ class OpenLibraryTest {
         assertEquals(Book("1", "No Cover", ""), parseSearch("1", """{"docs":[{"title":"No Cover"}]}"""))
         assertNull(parseSearch("1", """{"numFound":0,"docs":[]}"""))
     }
+
+    @Test
+    fun parsesEditionSize() {
+        assertEquals(1008 to BookSize.Tall, parseEdition("""{"physical_format":"Hardcover","number_of_pages":1008}"""))
+        assertEquals(300 to BookSize.Pocket, parseEdition("""{"physical_format":"Mass Market Paperback","number_of_pages":300}"""))
+        assertEquals(null to BookSize.Regular, parseEdition("""{"title":"Sapiens"}"""))
+    }
 }
