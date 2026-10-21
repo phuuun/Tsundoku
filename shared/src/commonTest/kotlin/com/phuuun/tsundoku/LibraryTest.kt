@@ -34,6 +34,12 @@ class LibraryTest {
     }
 
     @Test
+    fun booksFromANewerVersionStillLoad() {
+        val books = decodeBooks("""[{"isbn":"1","title":"Mine","author":"Me","someFutureField":42}]""")
+        assertEquals("Mine", books.single().title)
+    }
+
+    @Test
     fun rereadKeepsHistoryAndReadsStayInDateOrder() {
         val library = Library(tempDir())
         val first = Read(LocalDate(2025, 3, 1), 5, "Awesome")

@@ -40,6 +40,7 @@ internal fun parseSearch(isbn: String, body: String): Book? {
 
 /** Page count and size of this exact edition. Null when Open Library doesn't know the ISBN; throws when it can't be reached. */
 suspend fun lookupSize(isbn: String): Pair<Int?, BookSize>? {
+    if (cleanIsbn(isbn) != isbn) return null // a Goodreads or StoryGraph import without an ISBN ("gr-…", "sg-…")
     val response = client.get("https://openlibrary.org/isbn/$isbn.json") { expectSuccess = false }
     if (response.status == HttpStatusCode.NotFound) return null
     check(response.status == HttpStatusCode.OK) { "Open Library: ${response.status}" }

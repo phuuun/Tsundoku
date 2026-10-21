@@ -79,6 +79,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Search
@@ -617,6 +618,7 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
     var book by remember { mutableStateOf(Book("", "", "")) }
     var lastScan by remember { mutableStateOf<String?>(null) }
     var photo by remember { mutableStateOf<ByteArray?>(null) }
+    var wrongMatch by remember { mutableStateOf(false) } // Open Library found a book, but you said it's not this one
     val focusManager = LocalFocusManager.current
 
     fun add(finished: Boolean, read: Read? = null) {
@@ -641,6 +643,7 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
                 step = if (found != null) Step.Found else Step.Manual
             } catch (e: Exception) {
                 error = "Couldn't reach Open Library. Check your connection."
+                scope.launch { delay(3_000); lastScan = null } // then the barcode still in front of the camera tries again
             }
             loading = false
         }
@@ -729,7 +732,11 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
                             }
                         }
                         ReadYet(onNotYet = { add(finished = false) }, onYes = { step = Step.Rate })
-                        TextButton({ step = Step.Manual }, Modifier.align(Alignment.CenterHorizontally)) {
+                        TextButton(
+                            // Its cover is the wrong book's too.
+                            { book = book.copy(coverUrl = null); wrongMatch = true; step = Step.Manual },
+                            Modifier.align(Alignment.CenterHorizontally),
+                        ) {
                             Text("Not this one? Type it in", color = colors.onSurfaceVariant)
                         }
                     }
@@ -737,7 +744,8 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
                     Step.Manual -> {
                         Text("Type it in", style = MaterialTheme.typography.headlineSmall)
                         Text(
-                            "Open Library doesn't know this one. Tap the cover to add a picture of it.",
+                            if (wrongMatch) "Fix the title and author. Tap the cover to add a picture of it."
+                            else "Open Library doesn't know this one. Tap the cover to add a picture of it.",
                             style = MaterialTheme.typography.bodyMedium,
                             color = colors.onSurfaceVariant,
                         )

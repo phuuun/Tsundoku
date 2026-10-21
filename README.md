@@ -5,9 +5,11 @@ Your personal library app. Keep track of the books you own, the ones you've read
 ## Features
 
 - Add books by scanning the barcode; title, author and cover come from [Open Library](https://openlibrary.org)
-- Take your own cover photo, and edit a book's cover, title and author
+- Your books stand on a bookshelf, spine out with the odd one face out; hold a book to pull it off the shelf and see its cover
+- Pocket, regular and tall books stand at their own height (looked up on Open Library, or set it yourself)
+- Photograph a book's cover or spine, crop it, and edit its title and author
 - Mark books as read with finish dates, ratings and reviews, including rereads
-- Favorites, search, and sorting by author
+- Favorites (always first on the shelf), search, and sorting by author's surname
 - Export and import your library, plus import from Goodreads and StoryGraph
 
 ## Install (Android)

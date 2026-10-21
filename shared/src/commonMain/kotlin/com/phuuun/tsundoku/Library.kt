@@ -236,8 +236,11 @@ class Library(val dir: String) {
 @Serializable
 class Backup(val books: List<Book>, val photos: Map<String, String> = emptyMap())
 
-/** Throws if [text] isn't a backup. Unknown keys are fine: a backup from a newer version still imports. */
-fun readBackup(text: String): Backup = Json { ignoreUnknownKeys = true }.decodeFromString(text)
+/** Unknown keys are fine: a file from a newer version (a backup, or books.json restored by Android) still loads. */
+private val Lenient = Json { ignoreUnknownKeys = true }
+
+/** Throws if [text] isn't a backup. */
+fun readBackup(text: String): Backup = Lenient.decodeFromString(text)
 
 // A backup is a file from outside the app: only let it write where Library.add would have.
 private val SafeCoverName = Regex("covers/[0-9A-Za-z-]+\\.jpg")
@@ -273,5 +276,5 @@ internal fun decodeBooks(text: String): List<Book> {
             })
         }
     }
-    return Json.decodeFromJsonElement<List<Book>>(migrated)
+    return Lenient.decodeFromJsonElement<List<Book>>(migrated)
 }
