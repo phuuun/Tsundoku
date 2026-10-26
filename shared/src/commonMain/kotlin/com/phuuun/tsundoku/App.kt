@@ -1,8 +1,25 @@
 package com.phuuun.tsundoku
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.ui.MotionDurationScale
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import kotlin.math.roundToInt
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
@@ -10,16 +27,12 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -38,20 +51,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -65,8 +74,6 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
@@ -81,15 +88,7 @@ import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material3.IconButton
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.StrokeJoin
-import androidx.compose.ui.graphics.drawscope.Stroke
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.sin
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material3.Icon
@@ -117,10 +116,8 @@ import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
-import androidx.compose.ui.unit.TextUnit
 import org.publicvalue.multiplatform.qrcode.CameraPermissionState
 import org.publicvalue.multiplatform.qrcode.CameraPosition
 import org.publicvalue.multiplatform.qrcode.CodeType
@@ -152,6 +149,14 @@ private fun Shelves(library: Library) {
     var query by remember { mutableStateOf("") }
     var importing by remember { mutableStateOf<Incoming?>(null) }
     var problem by remember { mutableStateOf<String?>(null) }
+    var newIsbn by remember { mutableStateOf<String?>(null) } // the book just added, so its shelf drops it in
+
+    // It only drops in once: clear it after the pager has had time to show it.
+    LaunchedEffect(newIsbn) {
+        if (newIsbn == null) return@LaunchedEffect
+        delay((1500 * (coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f)).toLong())
+        newIsbn = null
+    }
 
     // Export: the system's "save as" screen (Downloads, Drive, ...), then the whole library goes into that file.
     val saver = rememberFileSaverLauncher(FileKitDialogSettings.createDefault(), onError = { problem = "Couldn't save the backup." }) { file ->
@@ -189,10 +194,11 @@ private fun Shelves(library: Library) {
         }
     }
 
-    Box(Modifier.fillMaxSize().background(colors.background)) {
+    Box(Modifier.fillMaxSize().background(Bold.Paper)) {
         Column(Modifier.fillMaxSize()) {
             Header(
                 pager,
+                counts = listOf(false, true).map { done -> library.books.count { it.finished == done } },
                 onSelect = { scope.launch { pager.animateScrollToPage(it) } },
                 onExport = { saver.launch(suggestedName = "tsundoku-${today()}", defaultExtension = "json") },
                 onImport = { picker.launch() },
@@ -202,39 +208,39 @@ private fun Shelves(library: Library) {
                 // ponytail: filters and sorts the whole shelf on every keystroke; instant for thousands of books, no spinner needed
                 val shelf = library.books.filter { it.finished == (page == 1) && it.matches(query) }.sortedWith(ShelfOrder)
                 if (shelf.isEmpty()) EmptyShelf(page, query)
-                else Bookcase(shelf) { openIsbn = it.isbn }
+                else Bookcase(shelf, newIsbn) { openIsbn = it.isbn }
             }
         }
 
-        // The grid fades out under the add button instead of hitting a hard edge.
+        // The shelves fade out under the add button instead of hitting a hard edge.
         Box(
             Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(140.dp)
-                .background(Brush.verticalGradient(listOf(Color.Transparent, colors.background)))
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Bold.Paper)))
         )
         PillButton(
             "Add book",
             onClick = { adding = true },
+            big = true,
             modifier = Modifier.align(Alignment.BottomCenter).navigationBarsPadding().padding(bottom = 20.dp),
         )
     }
 
     if (adding) {
-        ModalBottomSheet(onDismissRequest = { adding = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = colors.surfaceContainerLow, dragHandle = null) {
-            DragHandle()
-            AddBook(library, onAdded = { finished ->
-                adding = false
+        Sheet(onDismiss = { adding = false }) { close ->
+            AddBook(library, onAdded = { added ->
+                close()
+                newIsbn = added.isbn
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
-                scope.launch { pager.animateScrollToPage(if (finished) 1 else 0) }
+                scope.launch { pager.animateScrollToPage(if (added.finished) 1 else 0) }
             })
         }
     }
 
     importing?.let { incoming ->
-        ModalBottomSheet(onDismissRequest = { importing = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = colors.surfaceContainerLow, dragHandle = null) {
-            DragHandle()
+        Sheet(onDismiss = { importing = null }) { close ->
             ImportReview(incoming, library) { replace ->
                 library.import(incoming.backup, replace)
-                importing = null
+                close()
                 haptics.performHapticFeedback(HapticFeedbackType.Confirm)
             }
         }
@@ -242,27 +248,31 @@ private fun Shelves(library: Library) {
     problem?.let {
         AlertDialog(
             onDismissRequest = { problem = null },
-            containerColor = colors.surfaceContainerHigh,
+            modifier = Modifier.enterFrom().border(2.dp, Bold.Ink, RoundedCornerShape(20.dp)),
+            containerColor = Bold.SurfaceHigh,
+            shape = RoundedCornerShape(20.dp),
             text = { Text(it) },
             confirmButton = { TextButton({ problem = null }) { Text("OK", color = colors.onSurface) } },
         )
     }
 
     // Looked up live, so editing a read inside the sheet shows straight away.
-    library.books.find { it.isbn == openIsbn }?.let { book ->
-        ModalBottomSheet(onDismissRequest = { openIsbn = null }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true), containerColor = colors.surfaceContainerLow, dragHandle = null) {
-            DragHandle()
+    // Kept past a remove, so the sheet still has its book to show while it slides down.
+    val last = remember { arrayOfNulls<Book>(1) }
+    val shown = library.books.find { it.isbn == openIsbn }?.also { last[0] = it } ?: last[0]?.takeIf { it.isbn == openIsbn }
+    shown?.let { book ->
+        Sheet(onDismiss = { openIsbn = null }) { close ->
             BookDetails(
                 book,
                 onFinish = { read ->
                     library.finish(book, read)
-                    openIsbn = null
+                    close()
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     scope.launch { pager.animateScrollToPage(1) }
                 },
                 onReread = {
                     library.reread(book)
-                    openIsbn = null
+                    close()
                     haptics.performHapticFeedback(HapticFeedbackType.Confirm)
                     scope.launch { pager.animateScrollToPage(0) }
                 },
@@ -286,69 +296,82 @@ private fun Shelves(library: Library) {
                     library.deleteRead(book, index)
                     // Deleting the only read sends the book back to To read; follow it there.
                     if (book.finished && book.reads.size == 1) {
-                        openIsbn = null
+                        close()
                         scope.launch { pager.animateScrollToPage(0) }
                     }
                 },
                 onRemove = {
                     library.remove(book)
-                    openIsbn = null
+                    close()
                 },
             )
         }
     }
 }
 
-/** TSUNDOKU eyebrow over the pill switch, both centred, with the library menu on the right. */
+/** The wordmark and library menu, then the big tab title with its count sticker, the tab chips, all following the pager. */
 @Composable
-private fun Header(pager: PagerState, onSelect: (Int) -> Unit, onExport: () -> Unit, onImport: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
+private fun Header(pager: PagerState, counts: List<Int>, onSelect: (Int) -> Unit, onExport: () -> Unit, onImport: () -> Unit) {
     val position = (pager.currentPage + pager.currentPageOffsetFraction).coerceIn(0f, 1f)
 
-    Column(
-        Modifier.fillMaxWidth().statusBarsPadding().padding(top = 12.dp, bottom = 20.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp), contentAlignment = Alignment.Center) {
-            Text("TSUNDOKU", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
-            Box(Modifier.align(Alignment.CenterEnd)) { LibraryMenu(onExport, onImport) }
+    Column(Modifier.fillMaxWidth().statusBarsPadding().padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 16.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("tsundoku", color = Bold.Ink, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = (-0.5).sp)
+            LibraryMenu(onExport, onImport)
         }
-        Spacer(Modifier.height(10.dp))
-
-        // The white pill slides with your finger, not after the swipe ends.
-        PillSwitch(ShelfNames, position, onSelect, Modifier.width(240.dp))
+        Spacer(Modifier.height(14.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            BigTitle(position)
+            CountSticker(counts[pager.settledPage])
+        }
+        Spacer(Modifier.height(14.dp))
+        PillSwitch(ShelfNames, position, onSelect, Modifier.fillMaxWidth())
     }
 }
 
-/** Two options with a white pill under the chosen one; [position] runs from 0 (the first) to 1 (the second). */
+/** Both titles, each sliding and fading by how far the pager is from its page; the row is as wide as the one showing. */
 @Composable
-private fun PillSwitch(options: List<String>, position: Float, onSelect: (Int) -> Unit, modifier: Modifier = Modifier) {
-    val colors = MaterialTheme.colorScheme
-    Box(
-        modifier.height(40.dp)
-            .border(1.dp, colors.outline, CircleShape)
-            .padding(4.dp)
-    ) {
-        Box(
-            Modifier.fillMaxWidth(0.5f).fillMaxHeight()
-                .graphicsLayer { translationX = size.width * position }
-                .background(colors.primary, CircleShape)
-        )
-        Row(Modifier.matchParentSize()) {
-            options.forEachIndexed { i, name ->
-                val selected = 1 - abs(position - i).coerceIn(0f, 1f)
-                Box(
-                    Modifier.weight(1f).fillMaxHeight().clip(CircleShape).clickable { onSelect(i) },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        name.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = lerp(colors.onSurfaceVariant, colors.onPrimary, selected),
-                    )
-                }
-            }
+private fun BigTitle(position: Float) {
+    Layout(content = {
+        ShelfNames.forEachIndexed { i, name ->
+            Text(
+                name, style = MaterialTheme.typography.headlineLarge, color = Bold.Ink, maxLines = 1, softWrap = false,
+                modifier = Modifier.graphicsLayer {
+                    translationX = (i - position) * 60.dp.toPx()
+                    alpha = (1f - abs(i - position)).coerceIn(0f, 1f)
+                },
+            )
         }
+    }) { measurables, constraints ->
+        val placeables = measurables.map { it.measure(constraints.copy(minWidth = 0)) }
+        val width = (placeables[0].width + (placeables[1].width - placeables[0].width) * position).roundToInt()
+        layout(width, placeables.maxOf { it.height }) { placeables.forEach { it.placeRelative(0, 0) } }
+    }
+}
+
+/** The pink tilted number: pops and wobbles whenever [count] changes. */
+@Composable
+private fun CountSticker(count: Int) {
+    val scale = remember { Animatable(1f) }
+    val tilt = remember { Animatable(-10f) }
+    var shown by remember { mutableStateOf(count) }
+    LaunchedEffect(count) {
+        if (count == shown) return@LaunchedEffect
+        shown = count
+        scale.snapTo(1.25f)
+        tilt.snapTo(-18f)
+        launch { scale.animateTo(1f, Motion.pop()) }
+        tilt.animateTo(-10f, Motion.pop())
+    }
+    Box(
+        Modifier.graphicsLayer { scaleX = scale.value; scaleY = scale.value; rotationZ = tilt.value }
+            .defaultMinSize(minWidth = 38.dp, minHeight = 38.dp)
+            .background(Bold.Pink, CircleShape)
+            .border(2.dp, Bold.Paper, CircleShape)
+            .padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text("$count", color = Bold.DarkInk, fontSize = 16.sp, fontWeight = FontWeight.ExtraBold)
     }
 }
 
@@ -357,21 +380,25 @@ private fun PillSwitch(options: List<String>, position: Float, onSelect: (Int) -
 private fun LibraryMenu(onExport: () -> Unit, onImport: () -> Unit) {
     val colors = MaterialTheme.colorScheme
     var open by remember { mutableStateOf(false) }
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
     Box {
         Box(
-            Modifier.size(36.dp).clip(CircleShape).border(1.dp, colors.outline, CircleShape).clickable { open = true },
+            Modifier.size(40.dp).pressScale(pressed).clip(CircleShape).background(Bold.Ink)
+                .clickable(source, indication = null, role = Role.Button, onClickLabel = "Library menu") { open = true },
             contentAlignment = Alignment.Center,
         ) {
             Canvas(Modifier.size(width = 16.dp, height = 4.dp)) {
                 val r = size.height / 2
-                listOf(r, size.width / 2, size.width - r).forEach { x -> drawCircle(colors.onSurface, r, Offset(x, r)) }
+                listOf(r, size.width / 2, size.width - r).forEach { x -> drawCircle(Bold.Paper, r, Offset(x, r)) }
             }
         }
         DropdownMenu(
             expanded = open,
             onDismissRequest = { open = false },
-            shape = RoundedCornerShape(14.dp),
-            containerColor = colors.surfaceContainerHigh,
+            shape = RoundedCornerShape(20.dp),
+            containerColor = Bold.SurfaceHigh,
+            border = BorderStroke(2.dp, Bold.Ink),
         ) {
             DropdownMenuItem(text = { Text("Export library") }, onClick = { open = false; onExport() })
             DropdownMenuItem(
@@ -422,10 +449,15 @@ private fun ImportReview(incoming: Incoming, library: Library, onImport: (replac
             LazyColumn(Modifier.weight(1f, fill = false).padding(top = 8.dp)) {
                 items(clashes, key = { it.first.isbn }) { (mine, theirs) ->
                     val swap = mine.isbn in replace
-                    HorizontalDivider(color = colors.outline)
+                    val flip = { replace = if (swap) replace - mine.isbn else replace + mine.isbn }
+                    val source = remember { MutableInteractionSource() }
+                    val pressed by source.collectIsPressedAsState()
+                    val mineColor by animateColorAsState(if (swap) colors.onSurfaceVariant else colors.onSurface, Motion.settle())
+                    val theirColor by animateColorAsState(if (swap) colors.onSurface else colors.onSurfaceVariant, Motion.settle())
+                    HorizontalDivider(color = Bold.QuietLine)
                     Row(
-                        Modifier.fillMaxWidth()
-                            .clickable { replace = if (swap) replace - mine.isbn else replace + mine.isbn }
+                        Modifier.fillMaxWidth().pressScale(pressed)
+                            .clickable(source, indication = null, onClick = flip)
                             .padding(vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -433,18 +465,10 @@ private fun ImportReview(incoming: Incoming, library: Library, onImport: (replac
                         Cover(mine, Modifier.width(40.dp))
                         Column(Modifier.weight(1f)) {
                             Text(mine.title, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text("Yours: ${mine.status()}", style = MaterialTheme.typography.bodyMedium, color = if (swap) colors.onSurfaceVariant else colors.onSurface)
-                            Text("File: ${theirs.status()}", style = MaterialTheme.typography.bodyMedium, color = if (swap) colors.onSurface else colors.onSurfaceVariant)
+                            Text("Yours: ${mine.status()}", style = MaterialTheme.typography.bodyMedium, color = mineColor)
+                            Text("File: ${theirs.status()}", style = MaterialTheme.typography.bodyMedium, color = theirColor)
                         }
-                        Text(
-                            if (swap) "REPLACE" else "KEEP MINE",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (swap) colors.onPrimary else colors.onSurface,
-                            modifier = Modifier
-                                .background(if (swap) colors.primary else Color.Transparent, CircleShape)
-                                .border(1.dp, if (swap) colors.primary else colors.outlineVariant, CircleShape)
-                                .padding(horizontal = 12.dp, vertical = 6.dp),
-                        )
+                        ChoicePill(if (swap) "REPLACE" else "KEEP MINE", chosen = swap, onClick = flip)
                     }
                 }
             }
@@ -486,12 +510,15 @@ private fun EmptyShelf(page: Int, query: String) {
     ) {
         Text(
             when {
-                query.isNotBlank() -> "NO MATCHES"
-                page == 0 -> "NOTHING TO READ"
-                else -> "NOTHING FINISHED YET"
+                query.isNotBlank() -> "No matches"
+                page == 0 -> "Nothing to read"
+                else -> "Nothing finished yet"
             },
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            color = Bold.Ink,
+            fontSize = 28.sp,
+            lineHeight = 32.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = (-1).sp,
         )
         Spacer(Modifier.height(10.dp))
         Text(
@@ -509,15 +536,15 @@ private fun EmptyShelf(page: Int, query: String) {
 
 /** The title sits underneath the image, so a missing or broken cover still reads as the book. */
 @Composable
-fun Cover(book: Book, modifier: Modifier, corner: Int = 4, photo: ByteArray? = null) {
+fun Cover(book: Book, modifier: Modifier, photo: ByteArray? = null) {
     val colors = MaterialTheme.colorScheme
     val dir = LocalDataDir.current
     Box(
         modifier
             .aspectRatio(2f / 3f)
-            .clip(RoundedCornerShape(corner.dp))
+            .clip(RoundedCornerShape(6.dp))
             .background(colors.surfaceVariant)
-            .border(0.5.dp, colors.outline, RoundedCornerShape(corner.dp)),
+            .border(2.dp, Bold.Paper, RoundedCornerShape(6.dp)),
         contentAlignment = Alignment.Center,
     ) {
         Text(
@@ -539,77 +566,22 @@ fun Cover(book: Book, modifier: Modifier, corner: Int = 4, photo: ByteArray? = n
     }
 }
 
-// Drawn inside the sheet: Material's handle slot wraps it in a focusable box that turns grey once a text field goes away.
+/** An error line that expands in and fades; it keeps its last message while collapsing. */
 @Composable
-private fun DragHandle() {
-    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier.padding(top = 12.dp, bottom = 20.dp).size(width = 36.dp, height = 4.dp)
-                .background(MaterialTheme.colorScheme.outlineVariant, CircleShape)
-        )
-    }
-}
-
-@Composable
-private fun PillButton(
-    text: String,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    loading: Boolean = false,
-) {
-    Button(
-        onClick = onClick,
-        enabled = enabled && !loading,
-        shape = CircleShape,
-        colors = ButtonDefaults.buttonColors(
-            disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
-            disabledContentColor = MaterialTheme.colorScheme.onPrimary,
-        ),
-        contentPadding = PaddingValues(horizontal = 32.dp),
-        modifier = modifier.height(52.dp),
-    ) {
-        if (loading) CircularProgressIndicator(Modifier.size(18.dp), color = MaterialTheme.colorScheme.onPrimary, strokeWidth = 2.dp)
-        else Text(text, fontSize = 15.sp, style = MaterialTheme.typography.titleMedium)
-    }
-}
-
-@Composable
-private fun OutlinePill(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
-    OutlinedButton(
-        onClick = onClick,
-        enabled = enabled,
-        shape = CircleShape,
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
-        modifier = modifier.height(52.dp),
-    ) {
-        Text(text, fontSize = 15.sp, style = MaterialTheme.typography.titleMedium)
-    }
-}
-
-@Composable
-private fun Field(value: String, onChange: (String) -> Unit, placeholder: String, modifier: Modifier = Modifier) {
-    val colors = MaterialTheme.colorScheme
-    OutlinedTextField(
-        value = value,
-        onValueChange = onChange,
-        placeholder = { Text(placeholder, color = colors.onSurfaceVariant) },
-        singleLine = true,
-        shape = RoundedCornerShape(14.dp),
-        colors = OutlinedTextFieldDefaults.colors(
-            unfocusedBorderColor = colors.outline,
-            focusedBorderColor = colors.onSurfaceVariant,
-            cursorColor = colors.onSurface,
-        ),
-        modifier = modifier.fillMaxWidth(),
-    )
+private fun ErrorText(message: String?) {
+    val last = remember { arrayOf(message) }
+    if (message != null) last[0] = message
+    AnimatedVisibility(
+        visible = message != null,
+        enter = expandVertically(Motion.settle()) + fadeIn(Motion.settle()),
+        exit = shrinkVertically(Motion.settle()) + fadeOut(Motion.settle()),
+    ) { Text(last[0].orEmpty(), style = MaterialTheme.typography.bodyMedium, color = Bold.Error) }
 }
 
 private enum class Step { Scan, Type, Found, Manual, Rate }
 
 @Composable
-private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
+private fun AddBook(library: Library, onAdded: (Book) -> Unit) {
     val colors = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var input by remember { mutableStateOf("") }
@@ -623,8 +595,9 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
     val focusManager = LocalFocusManager.current
 
     fun add(finished: Boolean, read: Read? = null) {
-        library.add(book.copy(title = book.title.trim(), author = book.author.trim(), finished = finished, reads = listOfNotNull(read)), photo)
-        onAdded(finished)
+        val added = book.copy(title = book.title.trim(), author = book.author.trim(), finished = finished, reads = listOfNotNull(read))
+        library.add(added, photo)
+        onAdded(added)
     }
 
     fun search(raw: String) {
@@ -666,8 +639,17 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
         Text("ADD A BOOK", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
         Spacer(Modifier.height(18.dp))
 
-        AnimatedContent(step, transitionSpec = { fadeIn() togetherWith fadeOut() }) { current ->
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        AnimatedContent(
+            step,
+            transitionSpec = {
+                // Forward comes in from the right, back from the left.
+                val dir = if (targetState.ordinal >= initialState.ordinal) 1 else -1
+                (slideInHorizontally(Motion.settle()) { dir * it / 3 } + fadeIn(Motion.settle()))
+                    .togetherWith(slideOutHorizontally(Motion.settle()) { -dir * it / 3 } + fadeOut(Motion.settle()))
+                    .using(SizeTransform(clip = false) { _, _ -> Motion.settle() })
+            },
+        ) { current ->
+            Column(Modifier.blockWhileLeaving(this), verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 when (current) {
                     Step.Scan -> {
                         Text("Scan the barcode", style = MaterialTheme.typography.headlineSmall)
@@ -687,7 +669,7 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
                             )
                             if (loading) CircularProgressIndicator(color = Color.White, strokeWidth = 2.dp)
                         }
-                        error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.error) }
+                        ErrorText(error)
                         TextButton({ step = Step.Type; error = null }, Modifier.align(Alignment.CenterHorizontally)) {
                             Text("Type the ISBN instead", color = colors.onSurfaceVariant)
                         }
@@ -702,25 +684,23 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
                             style = MaterialTheme.typography.bodyMedium,
                             color = colors.onSurfaceVariant,
                         )
+                        val source = remember { MutableInteractionSource() }
+                        val focused by source.collectIsFocusedAsState()
                         OutlinedTextField(
                             value = input,
                             onValueChange = { input = it; error = null },
-                            placeholder = { Text("978…", color = colors.outlineVariant) },
-                            textStyle = TextStyle(fontSize = 22.sp, letterSpacing = 2.sp, color = colors.onSurface),
+                            placeholder = { Text("978…", color = Bold.Placeholder) },
+                            textStyle = TextStyle(fontSize = 22.sp, letterSpacing = 2.sp, color = Bold.Ink),
                             singleLine = true,
-                            isError = error != null,
-                            supportingText = error?.let { { Text(it) } },
-                            shape = RoundedCornerShape(14.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedBorderColor = colors.outline,
-                                focusedBorderColor = colors.onSurfaceVariant,
-                                cursorColor = colors.onSurface,
-                            ),
+                            shape = FieldShape,
+                            colors = bareFieldColors(),
+                            interactionSource = source,
                             // ponytail: number pad can't type the X some old ISBN-10s end in; their barcodes carry an ISBN-13 anyway
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Search),
                             keyboardActions = KeyboardActions(onSearch = { search(input) }),
-                            modifier = Modifier.fillMaxWidth().focusRequester(focus),
+                            modifier = Modifier.fillMaxWidth().focusRequester(focus).fieldFrame(focused),
                         )
+                        ErrorText(error)
                         PillButton("Look it up", { search(input) }, Modifier.fillMaxWidth(), enabled = input.isNotBlank(), loading = loading)
                     }
 
@@ -756,7 +736,7 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
                                 if (shot != null) Cover(book, Modifier.fillMaxWidth(), photo = shot)
                                 else Box(
                                     Modifier.fillMaxWidth().aspectRatio(2f / 3f)
-                                        .border(1.dp, colors.outlineVariant, RoundedCornerShape(4.dp)),
+                                        .border(2.dp, Bold.QuietLine, RoundedCornerShape(6.dp)),
                                     contentAlignment = Alignment.Center,
                                 ) {
                                     Text(
@@ -772,7 +752,7 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
                                 Field(book.author, { book = book.copy(author = it) }, "Author")
                             }
                         }
-                        error?.let { Text(it, style = MaterialTheme.typography.bodyMedium, color = colors.error) }
+                        ErrorText(error)
                         ReadYet(
                             onNotYet = { add(finished = false) },
                             onYes = { step = Step.Rate },
@@ -822,7 +802,6 @@ private fun RateBook(
     var rating by remember { mutableStateOf(initial.rating) }
     var review by remember { mutableStateOf(initial.review.orEmpty()) }
     var picking by remember { mutableStateOf(false) }
-    var confirmDelete by remember { mutableStateOf(false) }
 
     if (picking) PickDate(finishedOn, onPick = { finishedOn = it }, onDismiss = { picking = false })
 
@@ -836,40 +815,44 @@ private fun RateBook(
         }
         Text(heading, style = MaterialTheme.typography.headlineSmall)
         Stars(rating, size = 40.sp) { rating = it }
+        val reviewSource = remember { MutableInteractionSource() }
+        val reviewFocused by reviewSource.collectIsFocusedAsState()
         OutlinedTextField(
             value = review,
             onValueChange = { review = it },
-            placeholder = { Text("Write a review, or don't", color = colors.onSurfaceVariant) },
+            placeholder = { Text("Write a review, or don't", color = Bold.Placeholder) },
             minLines = 3,
             maxLines = 8,
-            shape = RoundedCornerShape(14.dp),
-            colors = OutlinedTextFieldDefaults.colors(
-                unfocusedBorderColor = colors.outline,
-                focusedBorderColor = colors.onSurfaceVariant,
-                cursorColor = colors.onSurface,
-            ),
-            modifier = Modifier.fillMaxWidth(),
+            shape = FieldShape,
+            colors = bareFieldColors(),
+            interactionSource = reviewSource,
+            modifier = Modifier.fillMaxWidth().fieldFrame(reviewFocused),
         )
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("FINISHED ON", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, modifier = Modifier.weight(1f))
-            OutlinedButton(
-                onClick = { picking = true },
-                shape = CircleShape,
-                border = BorderStroke(1.dp, colors.outlineVariant),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = colors.onSurface),
-            ) { Text(finishedOn.pretty()) }
+            OutlinePill(finishedOn.pretty(), { picking = true })
         }
         PillButton(button, { onDone(Read(finishedOn, rating, review.trim().ifEmpty { null })) }, Modifier.fillMaxWidth())
-        if (onDelete != null) TextButton(
-            onClick = { if (confirmDelete) onDelete() else confirmDelete = true },
-            modifier = Modifier.align(Alignment.CenterHorizontally),
-        ) {
-            Text(
-                if (confirmDelete) "Tap again to delete this read" else "Delete this read",
-                color = if (confirmDelete) colors.error else colors.onSurfaceVariant,
-            )
-        }
+        if (onDelete != null) TapTwice("Delete this read", "Tap again to delete this read", onDelete, Modifier.align(Alignment.CenterHorizontally))
     }
+}
+
+/** A quiet text button that wants a second tap: the first fades it to Error and shakes it. */
+@Composable
+private fun TapTwice(label: String, armedLabel: String, onConfirm: () -> Unit, modifier: Modifier = Modifier) {
+    var armed by remember { mutableStateOf(false) }
+    var shakes by remember { mutableIntStateOf(0) }
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val color by animateColorAsState(if (armed) Bold.Error else Bold.Muted, Motion.settle())
+    Text(
+        if (armed) armedLabel else label,
+        style = MaterialTheme.typography.labelLarge,
+        color = color,
+        modifier = modifier.shake(shakes).pressScale(pressed).clip(CircleShape)
+            .clickable(source, indication = null, role = Role.Button) { if (armed) onConfirm() else { armed = true; shakes++ } }
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+    )
 }
 
 private val Months = listOf("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -881,7 +864,6 @@ private fun LocalDate.pretty() = "$day ${Months[month.ordinal]} $year"
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
 @Composable
 private fun PickDate(date: LocalDate, onPick: (LocalDate) -> Unit, onDismiss: () -> Unit) {
-    val colors = MaterialTheme.colorScheme
     val todayMillis = today().atStartOfDayIn(TimeZone.UTC).toEpochMilliseconds()
     val state = rememberDatePickerState(
         initialSelectedDateMillis = date.atStartOfDayIn(TimeZone.UTC).toEpochMilliseconds(),
@@ -889,45 +871,41 @@ private fun PickDate(date: LocalDate, onPick: (LocalDate) -> Unit, onDismiss: ()
             override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= todayMillis
         },
     )
-    val pickerColors = DatePickerDefaults.colors(containerColor = colors.surfaceContainerHigh)
+    val pickerColors = DatePickerDefaults.colors(
+        containerColor = Bold.SurfaceHigh,
+        titleContentColor = Bold.Muted,
+        headlineContentColor = Bold.Ink,
+        weekdayContentColor = Bold.Muted,
+        subheadContentColor = Bold.Muted,
+        navigationContentColor = Bold.Ink,
+        yearContentColor = Bold.Ink,
+        currentYearContentColor = Bold.Ink,
+        selectedYearContainerColor = Bold.Tomato,
+        selectedYearContentColor = Bold.DarkInk,
+        dayContentColor = Bold.Ink,
+        disabledDayContentColor = Bold.QuietLine,
+        selectedDayContainerColor = Bold.Tomato,
+        selectedDayContentColor = Bold.DarkInk,
+        todayContentColor = Bold.Ink,
+        todayDateBorderColor = Bold.Ink,
+    )
+    val shape = RoundedCornerShape(20.dp)
     DatePickerDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
             TextButton({
                 state.selectedDateMillis?.let { onPick(Instant.fromEpochMilliseconds(it).toLocalDateTime(TimeZone.UTC).date) }
                 onDismiss()
-            }) { Text("Done", color = colors.onSurface) }
+            }) { Text("Done", color = Bold.Ink) }
         },
-        dismissButton = { TextButton(onDismiss) { Text("Cancel", color = colors.onSurfaceVariant) } },
+        dismissButton = { TextButton(onDismiss) { Text("Cancel", color = Bold.Muted) } },
+        shape = shape,
         colors = pickerColors,
+        modifier = Modifier.enterFrom().border(2.dp, Bold.Ink, shape),
     ) {
-        DatePicker(state, colors = pickerColors, showModeToggle = false)
-    }
-}
-
-/** Five stars; read-only when [onRate] is null. */
-@Composable
-private fun Stars(rating: Int?, size: TextUnit, onRate: ((Int?) -> Unit)? = null) {
-    val colors = MaterialTheme.colorScheme
-    val haptics = LocalHapticFeedback.current
-    Row(horizontalArrangement = Arrangement.spacedBy(size.value.dp / 6)) {
-        (1..5).forEach { star ->
-            val lit = rating != null && star <= rating
-            val scale by animateFloatAsState(if (lit) 1f else 0.86f, spring(dampingRatio = 0.4f, stiffness = 500f))
-            Text(
-                "★",
-                fontSize = size,
-                color = if (lit) colors.onSurface else colors.outlineVariant,
-                modifier = Modifier
-                    .graphicsLayer { scaleX = scale; scaleY = scale }
-                    .then(
-                        if (onRate == null) Modifier
-                        else Modifier.clickable(interactionSource = null, indication = null) {
-                            haptics.performHapticFeedback(HapticFeedbackType.SegmentTick)
-                            onRate(if (rating == star) null else star)
-                        }
-                    ),
-            )
+        val type = MaterialTheme.typography
+        MaterialTheme(typography = type.copy(headlineLarge = type.headlineSmall)) { // the picker's headline reads headlineLarge, the 50sp tab title
+            DatePicker(state, colors = pickerColors, showModeToggle = false)
         }
     }
 }
@@ -962,6 +940,19 @@ private data class Draft(
     val removeSpine: Boolean = false,
 )
 
+/** Which screen the book sheet shows; [depth] sets the slide direction. */
+private sealed interface BookScreen {
+    val depth: Int
+
+    data object Main : BookScreen { override val depth = 0 }
+    /** [draft] is only where editing began; the live one is BookDetails' `draft`. */
+    data class Edit(val draft: Draft) : BookScreen { override val depth = 1 }
+    data object Finish : BookScreen { override val depth = 2 }
+    data class EditRead(val index: Int, val read: Read) : BookScreen { override val depth = 2 }
+    data object AddRead : BookScreen { override val depth = 2 }
+}
+
+/** The book sheet: the book itself, and the screens that slide in from it (edit, finish, edit a read, add a read). */
 @Composable
 private fun BookDetails(
     book: Book,
@@ -975,81 +966,117 @@ private fun BookDetails(
     onEditDetails: (Draft) -> Unit,
     onRemove: () -> Unit,
 ) {
-    val colors = MaterialTheme.colorScheme
-    var finishing by remember { mutableStateOf(false) }
-    var editingRead by remember { mutableStateOf<Int?>(null) }
-    var addingRead by remember { mutableStateOf(false) }
-    var draft by remember { mutableStateOf<Draft?>(null) } // non-null while the pen's edit mode is on
-    var confirmRemove by remember { mutableStateOf(false) }
+    var screen by remember { mutableStateOf<BookScreen>(BookScreen.Main) }
+    var draft by remember { mutableStateOf<Draft?>(null) } // non-null while the pen's edit mode is on; outlives a trip to a read
+    fun back() { screen = draft?.let { BookScreen.Edit(it) } ?: BookScreen.Main }
 
     val form = Modifier.verticalScroll(rememberScrollState()).navigationBarsPadding().imePadding()
         .padding(start = 24.dp, end = 24.dp, bottom = 28.dp)
-    if (finishing) {
-        Box(form) {
-            RateBook(book, null, Read(today()), if (book.rereading) "How was it this time?" else "How was it?", "Add to Finished", onDone = onFinish)
-        }
-        return
-    }
-    editingRead?.let { index ->
-        Box(form) {
-            RateBook(
-                book, null, book.reads[index], "Edit this read", "Save",
-                onDelete = { editingRead = null; onDeleteRead(index) },
-            ) { onEditRead(index, it); editingRead = null }
-        }
-        return
-    }
-    if (addingRead) {
-        Box(form) {
-            RateBook(book, null, Read(today()), "Add a read", "Add read") { onAddRead(it); addingRead = false }
-        }
-        return
-    }
-    draft?.let {
-        Box(form) {
-            EditBook(
-                book, it,
-                onChange = { draft = it },
-                onEditRead = { index -> editingRead = index },
-                onAddRead = { addingRead = true },
-                onCancel = { draft = null },
-                onSave = {
-                    onEditDetails(it)
-                    draft = null
-                },
+    AnimatedContent(
+        screen,
+        transitionSpec = {
+            // Deeper comes in from the right, shallower from the left.
+            val dir = if (targetState.depth >= initialState.depth) 1 else -1
+            (slideInHorizontally(Motion.settle()) { dir * it / 3 } + fadeIn(Motion.settle()))
+                .togetherWith(slideOutHorizontally(Motion.settle()) { -dir * it / 3 } + fadeOut(Motion.settle()))
+                .using(SizeTransform(clip = false) { _, _ -> Motion.settle() })
+        },
+        contentKey = { it::class }, // typing in the edit screen changes the draft, not the screen
+    ) { current ->
+        Box(Modifier.blockWhileLeaving(this)) { when (current) {
+            BookScreen.Main -> BookMain(
+                book, onFinish = { screen = BookScreen.Finish }, onReread, onFavorite, onShowCover,
+                onEdit = { val d = Draft(book.title, book.author, book.size ?: BookSize.Regular); draft = d; screen = BookScreen.Edit(d) },
+                onRemove,
             )
-        }
-        return
+            is BookScreen.Edit -> Box(form) {
+                val live = draft ?: current.draft // null once saved or cancelled, while this screen slides out
+                EditBook(
+                    book, live,
+                    onChange = { draft = it; screen = BookScreen.Edit(it) }, // keeps the leaving screen on the last typed draft
+                    onEditRead = { index -> screen = BookScreen.EditRead(index, book.reads[index]) },
+                    onAddRead = { screen = BookScreen.AddRead },
+                    onCancel = { draft = null; screen = BookScreen.Main },
+                    onSave = { onEditDetails(live); draft = null; screen = BookScreen.Main },
+                )
+            }
+            BookScreen.Finish -> Box(form) {
+                RateBook(book, null, Read(today()), if (book.rereading) "How was it this time?" else "How was it?", "Add to Finished", onDone = onFinish)
+            }
+            is BookScreen.EditRead -> Box(form) {
+                RateBook(
+                    book, null, current.read, "Edit this read", "Save",
+                    onDelete = { onDeleteRead(current.index); back() },
+                ) { onEditRead(current.index, it); back() }
+            }
+            BookScreen.AddRead -> Box(form) {
+                RateBook(book, null, Read(today()), "Add a read", "Add read") { onAddRead(it); back() }
+            }
+        } }
     }
+}
 
+/** The favourite star: pops and turns a quarter when switched on. */
+@Composable
+private fun FavoriteStar(favorite: Boolean) {
+    val scale = remember { Animatable(1f) }
+    val turn = remember { Animatable(0f) }
+    var was by remember { mutableStateOf(favorite) }
+    LaunchedEffect(favorite) {
+        if (favorite && !was) {
+            scale.snapTo(1.4f); turn.snapTo(-90f)
+            launch { turn.animateTo(0f, Motion.pop()) }
+            scale.animateTo(1f, Motion.pop())
+        }
+        was = favorite
+    }
+    StarShape(
+        filled = favorite,
+        color = if (favorite) Bold.Yellow else Bold.Ink,
+        outline = if (favorite) Bold.DarkInk else null,
+        modifier = Modifier.size(17.dp).graphicsLayer { scaleX = scale.value; scaleY = scale.value; rotationZ = turn.value },
+    )
+}
+
+/** The sheet's first screen: cover, how it stands, status, reads, and the actions. */
+@Composable
+private fun BookMain(
+    book: Book,
+    onFinish: () -> Unit,
+    onReread: () -> Unit,
+    onFavorite: () -> Unit,
+    onShowCover: (Boolean) -> Unit,
+    onEdit: () -> Unit,
+    onRemove: () -> Unit,
+) {
+    val colors = MaterialTheme.colorScheme
     Column(
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).navigationBarsPadding()
             .padding(start = 24.dp, end = 24.dp, bottom = 20.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Box(Modifier.fillMaxWidth()) {
-            Cover(book, Modifier.align(Alignment.TopCenter).width(128.dp).shadow(24.dp, RoundedCornerShape(6.dp)), corner = 6)
+            Cover(book, Modifier.align(Alignment.TopCenter).width(128.dp).enterFrom(scale = 0.9f, offsetY = 8.dp).shadow(24.dp, RoundedCornerShape(6.dp)))
             RoundButton(if (book.favorite) "Unfavorite" else "Favorite", Modifier.align(Alignment.TopStart), onClick = onFavorite) {
-                StarShape(filled = book.favorite, color = colors.onSurface, modifier = Modifier.size(17.dp))
+                FavoriteStar(book.favorite)
             }
-            RoundButton("Edit book", Modifier.align(Alignment.TopEnd), onClick = { draft = Draft(book.title, book.author, book.size ?: BookSize.Regular) }) {
+            RoundButton("Edit book", Modifier.align(Alignment.TopEnd), onClick = onEdit) {
                 Icon(Icons.Outlined.Edit, contentDescription = null, tint = colors.onSurface, modifier = Modifier.size(18.dp))
             }
         }
         // How it stands on the shelf, changed straight away.
         Spacer(Modifier.height(20.dp))
-        val face by animateFloatAsState(if (book.faceOut()) 1f else 0f, spring(dampingRatio = 0.8f, stiffness = 500f))
+        val face by animateFloatAsState(if (book.faceOut()) 1f else 0f, Motion.settle())
         PillSwitch(listOf("Spine", "Cover"), face, { onShowCover(it == 1) }, Modifier.width(200.dp))
         Spacer(Modifier.height(24.dp))
-        Text(
+        StatusSticker(
             when {
                 book.finished && book.reads.size > 1 -> "FINISHED · READ ${book.reads.size}×"
                 book.finished -> "FINISHED"
                 book.rereading -> "REREADING"
                 else -> "TO READ"
             },
-            style = MaterialTheme.typography.labelSmall,
-            color = colors.onSurfaceVariant,
+            if (book.finished) Bold.Pink else Bold.Mint,
         )
         Spacer(Modifier.height(8.dp))
         Text(book.title, style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
@@ -1077,18 +1104,8 @@ private fun BookDetails(
 
         Spacer(Modifier.height(28.dp))
         if (book.finished) PillButton("Read it again", onReread, Modifier.fillMaxWidth())
-        else PillButton("Finished it", { finishing = true }, Modifier.fillMaxWidth())
-        TextButton(
-            onClick = { if (confirmRemove) onRemove() else confirmRemove = true },
-            border = if (confirmRemove) BorderStroke(1.dp, colors.error) else null,
-            shape = CircleShape,
-            modifier = Modifier.padding(top = 8.dp),
-        ) {
-            Text(
-                if (confirmRemove) "Tap again to remove" else "Remove from shelf",
-                color = if (confirmRemove) colors.error else colors.onSurfaceVariant,
-            )
-        }
+        else PillButton("Finished it", onFinish, Modifier.fillMaxWidth())
+        TapTwice("Remove from shelf", "Tap again to remove", onRemove, Modifier.padding(top = 8.dp))
     }
 }
 
@@ -1105,7 +1122,7 @@ private fun EditBook(
 ) {
     val colors = MaterialTheme.colorScheme
     var cover by remember { mutableStateOf(false) } // the switch: spine first, like on the shelf
-    val position by animateFloatAsState(if (cover) 1f else 0f, spring(dampingRatio = 0.8f, stiffness = 500f))
+    val position by animateFloatAsState(if (cover) 1f else 0f, Motion.settle())
     // What the cover and spine will be after Save.
     val preview = book.copy(
         coverFile = book.coverFile.takeUnless { draft.removePhoto },
@@ -1144,25 +1161,6 @@ private fun EditBook(
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Field(draft.title, { onChange(draft.copy(title = it)) }, "Title")
                 Field(draft.author, { onChange(draft.copy(author = it)) }, "Author")
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    BookSize.entries.forEach { size ->
-                        val chosen = size == draft.size
-                        Box(
-                            Modifier.weight(1f).height(32.dp).clip(CircleShape)
-                                .border(1.dp, if (chosen) colors.primary else colors.outline, CircleShape)
-                                .background(if (chosen) colors.primary else Color.Transparent)
-                                .clickable { onChange(draft.copy(size = size)) },
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                size.name.uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                fontSize = 9.sp,
-                                color = if (chosen) colors.onPrimary else colors.onSurfaceVariant,
-                            )
-                        }
-                    }
-                }
                 if (cover && hasPhoto) TextButton({ onChange(draft.copy(photo = null, removePhoto = true)) }) {
                     Text(
                         if (book.coverUrl != null) "Use the Open Library cover" else "Remove photo",
@@ -1175,6 +1173,11 @@ private fun EditBook(
             }
         }
 
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            BookSize.entries.forEach { size ->
+                ChoicePill(size.name, size == draft.size, { onChange(draft.copy(size = size)) }, Modifier.weight(1f))
+            }
+        }
         Text("YOUR READS", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant, modifier = Modifier.padding(top = 8.dp))
         // Newest first; tap one to change its date, stars or review, or to delete it.
         book.reads.withIndex().reversed().forEach { (index, read) ->
@@ -1186,68 +1189,16 @@ private fun EditBook(
     }
 }
 
-/** Same round outline as the ⋯ button in the header. */
-@Composable
-private fun RoundButton(label: String, modifier: Modifier = Modifier, onClick: () -> Unit, content: @Composable () -> Unit) {
-    Box(
-        modifier.size(36.dp).clip(CircleShape).border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
-            .clickable(onClickLabel = label, onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) { content() }
-}
-
-/** A five-point star, outlined or filled (the icon pack's outline star isn't in the core set). */
-@Composable
-fun StarShape(filled: Boolean, color: Color, modifier: Modifier) {
-    Canvas(modifier) {
-        val star = Path().apply {
-            val outer = size.minDimension / 2
-            for (i in 0 until 10) {
-                val radius = if (i % 2 == 0) outer else outer * 0.45f
-                val angle = -PI / 2 + i * PI / 5
-                val x = center.x + radius * cos(angle).toFloat()
-                val y = center.y + radius * sin(angle).toFloat()
-                if (i == 0) moveTo(x, y) else lineTo(x, y)
-            }
-            close()
-        }
-        if (filled) drawPath(star, color)
-        else drawPath(star, color, style = Stroke(1.5.dp.toPx(), join = StrokeJoin.Round))
-    }
-}
-
-/** Filters as you type, no enter needed; the keyboard's search key just puts the keyboard away. */
-@Composable
-private fun SearchField(query: String, onQuery: (String) -> Unit, modifier: Modifier = Modifier) {
-    val colors = MaterialTheme.colorScheme
-    val focusManager = LocalFocusManager.current
-    OutlinedTextField(
-        value = query,
-        onValueChange = onQuery,
-        placeholder = { Text("Search title or author", color = colors.onSurfaceVariant) },
-        leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, tint = colors.onSurfaceVariant, modifier = Modifier.size(20.dp)) },
-        trailingIcon = if (query.isEmpty()) null else {
-            { IconButton({ onQuery(""); focusManager.clearFocus() }) { Icon(Icons.Outlined.Close, "Clear search", tint = colors.onSurfaceVariant) } }
-        },
-        singleLine = true,
-        shape = CircleShape,
-        colors = OutlinedTextFieldDefaults.colors(
-            unfocusedBorderColor = colors.outline,
-            focusedBorderColor = colors.onSurfaceVariant,
-            cursorColor = colors.onSurface,
-        ),
-        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-        keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-        modifier = modifier.fillMaxWidth(),
-    )
-}
-
 /** One read; tappable with an "Edit" on the right only in edit mode. */
 @Composable
 private fun ReadRow(read: Read, onClick: (() -> Unit)? = null) {
     val colors = MaterialTheme.colorScheme
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
     Row(
-        Modifier.fillMaxWidth().then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier).padding(top = 12.dp),
+        Modifier.fillMaxWidth()
+            .then(if (onClick != null) Modifier.pressScale(pressed).clickable(source, indication = null, onClick = onClick) else Modifier)
+            .padding(top = 12.dp),
         verticalAlignment = Alignment.Top,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {

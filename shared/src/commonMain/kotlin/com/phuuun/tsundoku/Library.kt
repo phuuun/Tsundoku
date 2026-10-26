@@ -100,6 +100,7 @@ class Library(val dir: String) {
 
     /** [photo] is a JPEG of the cover; it's written to `covers/` and wins over [Book.coverUrl]. */
     fun add(book: Book, photo: ByteArray? = null) {
+        if (has(book.isbn)) return // a double tap must not add twice
         books.add(0, book.copy(coverFile = photo?.let { writePhoto(book.isbn, it) } ?: book.coverFile))
         save()
     }

@@ -47,6 +47,7 @@ kotlin {
             implementation(libs.compose.material3)
             implementation(libs.compose.material.icons.core)
             implementation(libs.compose.ui)
+            implementation(libs.compose.components.resources)
             implementation(libs.compose.uiToolingPreview)
 
             implementation(libs.ktor.client.core)
@@ -69,4 +70,8 @@ kotlin {
 
 dependencies {
     androidRuntimeClasspath(libs.compose.uiTooling)
+}
+
+compose.resources {
+    packageOfResClass = "com.phuuun.tsundoku.res"
 }

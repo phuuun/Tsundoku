@@ -7,6 +7,14 @@ import kotlin.test.assertTrue
 
 class ShelfTest {
     @Test
+    fun riseDelayIsCapped() {
+        assertEquals(0L, riseDelayMillis(0))
+        assertEquals(250L, riseDelayMillis(10))
+        assertEquals(600L, riseDelayMillis(24))
+        assertEquals(600L, riseDelayMillis(500)) // a big library doesn't wait seconds for its last shelf
+    }
+
+    @Test
     fun aFullShelfStartsANewOneBelow() {
         // 100 wide: 40 + 2 + 40 fits, the next 40 doesn't; a book wider than the shelf gets one to itself.
         assertEquals(

@@ -11,6 +11,7 @@ Your personal library app. Keep track of the books you own, the ones you've read
 - Mark books as read with finish dates, ratings and reviews, including rereads
 - Favorites (always first on the shelf), search, and sorting by author's surname
 - Export and import your library, plus import from Goodreads and StoryGraph
+- A dark, bold look with springy animations
 
 ## Install (Android)
 

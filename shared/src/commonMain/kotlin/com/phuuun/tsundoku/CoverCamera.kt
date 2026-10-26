@@ -1,10 +1,14 @@
 package com.phuuun.tsundoku
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -95,7 +99,6 @@ expect fun cropJpeg(bytes: ByteArray, frame: Rect, quality: Int): ByteArray
  */
 @Composable
 fun CoverPicker(modifier: Modifier, spine: Boolean, onPhoto: (ByteArray, Float) -> Unit, content: @Composable () -> Unit) {
-    val colors = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
     var shooting by remember { mutableStateOf(false) }
@@ -118,9 +121,12 @@ fun CoverPicker(modifier: Modifier, spine: Boolean, onPhoto: (ByteArray, Float) 
                 .onSuccess { cropping = it } // an image it can't decode just leaves the cover as it was
         }
     }
-    Box(modifier.clip(RoundedCornerShape(4.dp)).clickable { menu = true }) {
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    Box(modifier.pressScale(pressed).clip(RoundedCornerShape(if (spine) 4.dp else 6.dp)).clickable(source, indication = null) { menu = true }) {
         content()
-        DropdownMenu(menu, { menu = false }, shape = RoundedCornerShape(14.dp), containerColor = colors.surfaceContainerHigh) {
+        DropdownMenu(menu, { menu = false }, shape = RoundedCornerShape(20.dp),
+            containerColor = Bold.SurfaceHigh, border = BorderStroke(2.dp, Bold.Ink)) {
             DropdownMenuItem(text = { Text("Take a photo") }, onClick = { menu = false; shooting = true })
             DropdownMenuItem(text = { Text("Choose from gallery") }, onClick = { menu = false; gallery.launch() })
         }
@@ -155,7 +161,7 @@ fun CoverCamera(frame: Rect, hint: String, onDone: (ByteArray?) -> Unit) {
                     modifier = Modifier.padding(32.dp),
                 )
             }
-            TextButton({ onDone(null) }, Modifier.padding(top = 8.dp)) { Text("Cancel", color = Color.White.copy(alpha = 0.7f)) }
+            TextButton({ onDone(null) }, Modifier.padding(top = 8.dp)) { Text("Cancel", color = Bold.Muted) }
         }
     }
 }
@@ -263,6 +269,9 @@ fun dragCrop(crop: Rect, grip: Grip, dx: Float, dy: Float): Rect {
 private fun CropPhoto(jpeg: ByteArray, spine: Boolean, onDone: (Pair<ByteArray, Float>?) -> Unit) {
     var photo by remember { mutableStateOf<Size?>(null) } // its size, once Coil has decoded it
     var crop by remember { mutableStateOf(Rect.Zero) }
+    var grip by remember { mutableStateOf<Grip?>(null) } // the handle being held, so it can grow
+    val dot by animateDpAsState(if (grip != null) 10.dp else 7.dp, Motion.press())
+    val barWidth by animateDpAsState(if (grip != null) 7.dp else 5.dp, Motion.press())
 
     Dialog(onDismissRequest = { onDone(null) }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
@@ -289,7 +298,6 @@ private fun CropPhoto(jpeg: ByteArray, spine: Boolean, onDone: (Pair<ByteArray, 
                     )
                     if (photo != null) Canvas(
                         Modifier.fillMaxSize().pointerInput(Unit) {
-                            var grip: Grip? = null
                             detectDragGestures(
                                 onDragStart = { at ->
                                     val box = Rect(crop.left * size.width, crop.top * size.height, crop.right * size.width, crop.bottom * size.height)
@@ -304,6 +312,8 @@ private fun CropPhoto(jpeg: ByteArray, spine: Boolean, onDone: (Pair<ByteArray, 
                                         .takeIf { (it.value - at).getDistance() < 40.dp.toPx() }?.key
                                         ?: Grip.Move.takeIf { box.contains(at) }
                                 },
+                                onDragEnd = { grip = null },
+                                onDragCancel = { grip = null },
                             ) { change, drag ->
                                 change.consume()
                                 grip?.let { crop = dragCrop(crop, it, drag.x / size.width, drag.y / size.height) }
@@ -320,20 +330,21 @@ private fun CropPhoto(jpeg: ByteArray, spine: Boolean, onDone: (Pair<ByteArray, 
                             Color.Black.copy(alpha = 0.6f),
                         )
                         drawRect(Color.White, box.topLeft, box.size, style = Stroke(2.dp.toPx()))
-                        listOf(box.topLeft, box.topRight, box.bottomLeft, box.bottomRight).forEach { drawCircle(Color.White, 7.dp.toPx(), it) }
+                        listOf(box.topLeft, box.topRight, box.bottomLeft, box.bottomRight).forEach { drawCircle(Color.White, dot.toPx(), it) }
                         // Short bars mid-edge: pull one to move just that side.
                         val bar = 12.dp.toPx()
-                        listOf(box.topCenter, box.bottomCenter).forEach { drawLine(Color.White, it - Offset(bar, 0f), it + Offset(bar, 0f), 5.dp.toPx(), StrokeCap.Round) }
-                        listOf(box.centerLeft, box.centerRight).forEach { drawLine(Color.White, it - Offset(0f, bar), it + Offset(0f, bar), 5.dp.toPx(), StrokeCap.Round) }
+                        listOf(box.topCenter, box.bottomCenter).forEach { drawLine(Color.White, it - Offset(bar, 0f), it + Offset(bar, 0f), barWidth.toPx(), StrokeCap.Round) }
+                        listOf(box.centerLeft, box.centerRight).forEach { drawLine(Color.White, it - Offset(0f, bar), it + Offset(0f, bar), barWidth.toPx(), StrokeCap.Round) }
                     }
                 }
             }
-            Row(Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                TextButton({ onDone(null) }) { Text("Cancel", color = Color.White.copy(alpha = 0.7f)) }
-                TextButton(
+            Row(Modifier.padding(bottom = 16.dp), horizontalArrangement = Arrangement.spacedBy(24.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton({ onDone(null) }) { Text("Cancel", color = Bold.Muted) }
+                PillButton(
+                    "Use photo",
                     onClick = { photo?.let { p -> onDone(cropJpeg(jpeg, crop, quality = 85) to crop.width * p.width / (crop.height * p.height)) } },
                     enabled = photo != null,
-                ) { Text("Use photo", color = Color.White) }
+                )
             }
         }
     }

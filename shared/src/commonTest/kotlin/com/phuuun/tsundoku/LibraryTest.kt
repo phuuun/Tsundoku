@@ -34,6 +34,14 @@ class LibraryTest {
     }
 
     @Test
+    fun addingTheSameIsbnTwiceKeepsOne() {
+        val library = Library(tempDir())
+        library.add(Book("9780000000001", "Dune", "Frank Herbert"))
+        library.add(Book("9780000000001", "Dune", "Frank Herbert")) // a second tap while the sheet slides away
+        assertEquals(1, library.books.count { it.isbn == "9780000000001" })
+    }
+
+    @Test
     fun booksFromANewerVersionStillLoad() {
         val books = decodeBooks("""[{"isbn":"1","title":"Mine","author":"Me","someFutureField":42}]""")
         assertEquals("Mine", books.single().title)

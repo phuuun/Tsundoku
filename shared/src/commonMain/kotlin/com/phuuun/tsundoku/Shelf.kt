@@ -1,5 +1,13 @@
 package com.phuuun.tsundoku
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.key
+import androidx.compose.ui.MotionDurationScale
+import androidx.compose.ui.text.font.FontWeight
+import kotlinx.coroutines.delay
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
@@ -20,10 +28,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -94,27 +100,41 @@ fun <T> packShelves(books: List<T>, width: (T) -> Float, max: Float, gap: Float)
 
 /** The books in [books]' order, standing on as many shelves as they need. */
 @Composable
-fun Bookcase(books: List<Book>, onOpen: (Book) -> Unit) {
-    val colors = MaterialTheme.colorScheme
+fun Bookcase(books: List<Book>, newIsbn: String?, onOpen: (Book) -> Unit) {
+    // Books composed on the first pass rise in; ones that scroll or filter in later don't.
+    var entered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { entered = true }
+    val dropped = remember(newIsbn) { mutableSetOf<String>() } // ponytail: marked while composing, fine for one drop
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val shelves = packShelves(books, Book::shelfWidth, maxWidth.value - 40, Gap)
+        val firstOnShelf = shelves.runningFold(0) { n, shelf -> n + shelf.size }
         LazyColumn(
             contentPadding = PaddingValues(start = 20.dp, top = 8.dp, end = 20.dp, bottom = 140.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
             modifier = Modifier.fillMaxSize(),
         ) {
-            items(shelves, key = { it.first().isbn }) { shelf ->
+            itemsIndexed(shelves, key = { _, shelf -> shelf.first().isbn }) { row, shelf ->
                 Column(Modifier.animateItem()) {
                     Row(horizontalArrangement = Arrangement.spacedBy(Gap.dp), verticalAlignment = Alignment.Bottom) {
-                        shelf.forEach { book -> ShelfBook(book) { onOpen(book) } }
+                        shelf.forEachIndexed { i, book ->
+                            val entry = when {
+                                book.isbn == newIsbn && dropped.add(book.isbn) -> Entry.Drop
+                                !entered -> Entry.Rise
+                                else -> Entry.None
+                            }
+                            key(book.isbn) { ShelfBook(book, entry, firstOnShelf[row] + i) { onOpen(book) } }
+                        }
                     }
                     // The plank they stand on.
-                    Box(Modifier.fillMaxWidth().height(5.dp).background(colors.outlineVariant, RoundedCornerShape(2.dp)))
+                    Box(Modifier.fillMaxWidth().height(8.dp).background(Bold.Ink, CircleShape))
                 }
             }
         }
     }
 }
+
+/** How a book arrives: standing already, rising with the rest of its shelf, or dropping in because it was just added. */
+private enum class Entry { None, Rise, Drop }
 
 /** How far up you slide a held book to open it. */
 private val SwipeToOpen = 64.dp
@@ -124,12 +144,25 @@ private val SwipeToOpen = 64.dp
  * or let go to put it back.
  */
 @Composable
-private fun ShelfBook(book: Book, onClick: () -> Unit) {
+private fun ShelfBook(book: Book, entryNow: Entry, position: Int, onClick: () -> Unit) {
     val haptics = LocalHapticFeedback.current
     var pressed by remember { mutableStateOf(false) }
     var held by remember { mutableStateOf(false) }
     var lift by remember { mutableStateOf(0f) } // px, how far it's been slid up (negative)
-    val scale by animateFloatAsState(if (pressed && !held) 0.95f else 1f, spring(dampingRatio = 0.6f, stiffness = 600f))
+    // Only the entry it first composed with counts: later recompositions must not change it mid-animation.
+    val entry = remember { entryNow }
+    val arrival = remember { Animatable(if (entry == Entry.None) 1f else 0f) }
+    LaunchedEffect(Unit) {
+        when (entry) {
+            Entry.None -> {}
+            Entry.Rise -> {
+                delay((riseDelayMillis(position) * (coroutineContext[MotionDurationScale]?.scaleFactor ?: 1f)).toLong())
+                arrival.animateTo(1f, Motion.settle())
+            }
+            Entry.Drop -> arrival.animateTo(1f, Motion.pop())
+        }
+    }
+    val scale by animateFloatAsState(if (pressed && !held) 0.95f else 1f, Motion.press())
     val out by animateFloatAsState(if (held) 1f else 0f, spring(dampingRatio = 0.7f, stiffness = 400f))
     // Follows the finger exactly, then springs back when let go.
     val slid by animateFloatAsState(lift, if (held) snap() else spring(dampingRatio = 0.7f, stiffness = 400f))
@@ -137,6 +170,11 @@ private fun ShelfBook(book: Book, onClick: () -> Unit) {
 
     Box(
         Modifier.size(book.shelfWidth().dp, height.dp)
+            .graphicsLayer {
+                val rise = if (entry == Entry.Drop) -40.dp else 24.dp
+                translationY = rise.toPx() * (1f - arrival.value)
+                alpha = arrival.value.coerceIn(0f, 1f)
+            }
             .zIndex(if (out > 0f) 1f else 0f) // over its neighbours while it's out
             .semantics(mergeDescendants = true) { role = Role.Button; onClick { onClick(); true } }
             .pointerInput(book.isbn) {
@@ -173,12 +211,9 @@ private fun ShelfBook(book: Book, onClick: () -> Unit) {
     ) {
         // Its place on the shelf empties as it comes out.
         Box(Modifier.fillMaxSize().graphicsLayer { scaleX = scale; scaleY = scale; alpha = 1f - out }) {
-            if (book.faceOut()) Cover(book, Modifier.fillMaxSize(), corner = 2)
+            if (book.faceOut()) Cover(book, Modifier.fillMaxSize())
             else Spine(book, Modifier.fillMaxSize())
-            if (book.favorite) Box(
-                Modifier.align(Alignment.TopCenter).padding(top = 5.dp).size(14.dp).background(Color.Black.copy(alpha = 0.75f), CircleShape),
-                contentAlignment = Alignment.Center,
-            ) { StarShape(filled = true, color = Color.White, modifier = Modifier.size(8.dp)) }
+            if (book.favorite) StarShape(true, Bold.Yellow, Modifier.align(Alignment.TopCenter).padding(top = 5.dp).size(14.dp), outline = Bold.DarkInk)
         }
         if (out > 0f) Cover(
             book,
@@ -187,34 +222,36 @@ private fun ShelfBook(book: Book, onClick: () -> Unit) {
                     translationY = -28.dp.toPx() * out + slid
                     scaleX = 0.8f + 0.35f * out
                     scaleY = 0.8f + 0.35f * out
-                    rotationY = 90f * (1 - out) // turns from its spine to its cover
+                    rotationY = if (book.faceOut()) 0f else 90f * (1 - out) // turns from its spine to its cover; a face-out book already shows it
                     cameraDistance = 12 * density
                 }
-                .shadow(24.dp * out, RoundedCornerShape(4.dp)),
+                .shadow(32.dp * out, RoundedCornerShape(6.dp)),
         )
     }
 }
 
-/** Book cloth, with ink that reads on it. The drawn spines are covers too, so they get colour. */
+/** Bold cloth, with ink that reads on it. The drawn spines are covers too, so they get colour. */
 private val SpineColors = listOf(
-    Color(0xFF1F3A5F) to Color(0xFFF2EBDD), // navy
-    Color(0xFF7A2E2E) to Color(0xFFF2EBDD), // oxblood
-    Color(0xFF2F4A3A) to Color(0xFFF2EBDD), // forest
-    Color(0xFFE9DFC9) to Color(0xFF2B2B2B), // cream
-    Color(0xFF3B3B3B) to Color(0xFFF2EBDD), // charcoal
-    Color(0xFFC9A227) to Color(0xFF1E1E1E), // mustard
-    Color(0xFF8A5A44) to Color(0xFFF2EBDD), // tan
-    Color(0xFFB8C4C2) to Color(0xFF1E1E1E), // grey-blue
-    Color(0xFF5B3F6B) to Color(0xFFF2EBDD), // plum
-    Color(0xFFD9774B) to Color(0xFF1E1E1E), // orange
+    Color(0xFF2D4BFF) to Color.White, // blue
+    Color(0xFFFF5A36) to Bold.DarkInk, // tomato
+    Color(0xFF3DDC97) to Bold.DarkInk, // mint
+    Color(0xFFFFE8C2) to Bold.DarkInk, // cream
+    Color(0xFFF4F4F5) to Bold.DarkInk, // off-white (pure white would vanish on Paper)
+    Color(0xFFFFC93C) to Bold.DarkInk, // yellow
+    Color(0xFF7B5CFF) to Color.White, // violet
+    Color(0xFF8FD5FF) to Bold.DarkInk, // sky
+    Color(0xFFFF4F9A) to Bold.DarkInk, // pink
+    Color(0xFFC6F432) to Bold.DarkInk, // lime
 )
+
+private val SpineShape = RoundedCornerShape(4.dp)
 
 /** The spine photo, or a drawn spine: title top to bottom, the author's surname at the foot. */
 @Composable
 fun Spine(book: Book, modifier: Modifier, photo: ByteArray? = null) {
     val dir = LocalDataDir.current
     val (cloth, ink) = SpineColors[book.isbn.hashCode().mod(SpineColors.size)]
-    Box(modifier.clip(RoundedCornerShape(2.dp)).background(cloth), contentAlignment = Alignment.Center) {
+    Box(modifier.clip(SpineShape).background(cloth).border(2.dp, Bold.Paper, SpineShape), contentAlignment = Alignment.Center) {
         val image = photo ?: book.spineFile?.let { "file://$dir/$it" }
         if (image != null) AsyncImage(image, book.title, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
         // Starts below the favorite star; a fat spine has room for the title on two lines.
@@ -223,13 +260,14 @@ fun Spine(book: Book, modifier: Modifier, photo: ByteArray? = null) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                book.title, color = ink, fontSize = 10.sp, lineHeight = 12.sp, maxLines = if (book.spineWidth() >= 30) 2 else 1,
+                book.title, color = ink, fontSize = 10.5.sp, fontWeight = FontWeight.Bold, lineHeight = 12.sp, maxLines = if (book.spineWidth() >= 30) 2 else 1,
                 overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f),
             )
             if (book.author.isNotBlank()) Text(
                 book.surname.uppercase(),
                 color = ink.copy(alpha = 0.7f),
                 fontSize = 8.sp,
+                fontWeight = FontWeight.ExtraBold,
                 letterSpacing = 1.sp,
                 maxLines = 1,
                 modifier = Modifier.padding(start = 8.dp),
