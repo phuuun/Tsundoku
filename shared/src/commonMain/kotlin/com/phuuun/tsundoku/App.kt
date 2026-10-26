@@ -532,7 +532,8 @@ fun Cover(book: Book, modifier: Modifier, corner: Int = 4, photo: ByteArray? = n
         AsyncImage(
             model = photo ?: book.coverFile?.let { "file://$dir/$it" } ?: book.coverUrl,
             contentDescription = book.title,
-            contentScale = ContentScale.Crop,
+            // Your own photo shows exactly as you cropped it (squeezed a little if it isn't 2:3); Open Library's is trimmed to fit.
+            contentScale = if (photo != null || book.coverFile != null) ContentScale.FillBounds else ContentScale.Crop,
             modifier = Modifier.fillMaxSize(),
         )
     }
@@ -750,7 +751,7 @@ private fun AddBook(library: Library, onAdded: (finished: Boolean) -> Unit) {
                             color = colors.onSurfaceVariant,
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                            CoverPicker(Modifier.width(84.dp), aspect = 2f / 3f, onPhoto = { jpeg, _ -> photo = jpeg }) {
+                            CoverPicker(Modifier.width(84.dp), spine = false, onPhoto = { jpeg, _ -> photo = jpeg }) {
                                 val shot = photo
                                 if (shot != null) Cover(book, Modifier.fillMaxWidth(), photo = shot)
                                 else Box(
@@ -1126,9 +1127,9 @@ private fun EditBook(
                 // At its real proportions, standing in a box as tall as a Tall book, so the sizes visibly differ.
                 val height = 126 * draft.size.height
                 Box(Modifier.height(126.dp), contentAlignment = Alignment.BottomCenter) {
-                    if (cover) CoverPicker(Modifier.width((height * 2 / 3).dp), aspect = 2f / 3f, onPhoto = { jpeg, _ -> onChange(draft.copy(photo = jpeg, removePhoto = false)) }) {
+                    if (cover) CoverPicker(Modifier.width((height * 2 / 3).dp), spine = false, onPhoto = { jpeg, _ -> onChange(draft.copy(photo = jpeg, removePhoto = false)) }) {
                         Cover(preview, Modifier.fillMaxWidth(), photo = draft.photo)
-                    } else CoverPicker(Modifier, aspect = null, onPhoto = { jpeg, shape -> onChange(draft.copy(spine = jpeg, spineAspect = shape, removeSpine = false)) }) {
+                    } else CoverPicker(Modifier, spine = true, onPhoto = { jpeg, shape -> onChange(draft.copy(spine = jpeg, spineAspect = shape, removeSpine = false)) }) {
                         Spine(preview, Modifier.height(height.dp).width((height * preview.spineWidth() / preview.spineHeight()).dp), photo = draft.spine)
                     }
                 }

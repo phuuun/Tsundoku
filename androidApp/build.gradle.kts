@@ -25,8 +25,8 @@ android {
         applicationId = "com.phuuun.tsundoku"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 6 // must go up with every release, or Android won't install it as an update
-        versionName = "1.5"
+        versionCode = 7 // must go up with every release, or Android won't install it as an update
+        versionName = "1.5.1"
     }
     base.archivesName = "Tsundoku-v${defaultConfig.versionName}" // APK: Tsundoku-v<versionName>-release.apk
     packaging {

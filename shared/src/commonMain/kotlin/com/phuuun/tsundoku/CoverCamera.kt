@@ -45,6 +45,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathFillType
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -74,7 +75,6 @@ import kotlinx.io.files.SystemFileSystem
 import kotlinx.io.readByteArray
 import org.publicvalue.multiplatform.qrcode.CameraPermissionStatus
 import org.publicvalue.multiplatform.qrcode.rememberCameraPermissionState
-import kotlin.math.abs
 
 /**
  * The book-shaped frame, as fractions of the 3:4 viewfinder: 80% wide, 90% tall, centred, so it's 2:3 like a cover.
@@ -90,26 +90,24 @@ private val WholeShot = Rect(0f, 0f, 1f, 1f)
 expect fun cropJpeg(bytes: ByteArray, frame: Rect, quality: Int): ByteArray
 
 /**
- * A tappable cover or spine: asks "Take a photo" (the camera) or "Choose from gallery", then you crop it. [aspect]
- * (width ÷ height) locks the crop's shape, null leaves it free and frames a spine instead of a cover. [onPhoto] gets
- * the cropped JPEG and its width ÷ height.
+ * A tappable cover or spine: asks "Take a photo" (the camera) or "Choose from gallery", then you crop it, any shape.
+ * [onPhoto] gets the cropped JPEG and its width ÷ height.
  */
 @Composable
-fun CoverPicker(modifier: Modifier, aspect: Float?, onPhoto: (ByteArray, Float) -> Unit, content: @Composable () -> Unit) {
+fun CoverPicker(modifier: Modifier, spine: Boolean, onPhoto: (ByteArray, Float) -> Unit, content: @Composable () -> Unit) {
     val colors = MaterialTheme.colorScheme
     val scope = rememberCoroutineScope()
     var menu by remember { mutableStateOf(false) }
     var shooting by remember { mutableStateOf(false) }
     var cropping by remember { mutableStateOf<ByteArray?>(null) }
     if (shooting) {
-        val spine = aspect == null
         CoverCamera(if (spine) WholeShot else CoverFrame, if (spine) "PUT THE SPINE IN THE MIDDLE" else "FIT THE COVER IN THE FRAME") { shot ->
             shooting = false
             cropping = shot
         }
     }
     cropping?.let { photo ->
-        CropPhoto(photo, aspect) { cropped ->
+        CropPhoto(photo, spine) { cropped ->
             cropping = null
             cropped?.let { (jpeg, shape) -> onPhoto(jpeg, shape) }
         }
@@ -230,59 +228,41 @@ private suspend fun cropToFrame(path: String, frame: Rect): ByteArray {
     return cropJpeg(upright, frame, quality = 80)
 }
 
-enum class Grip { TopLeft, TopRight, BottomLeft, BottomRight, Move }
+/** Which sides of the crop a drag moves: a corner moves two, an edge one, [Move] all four together. */
+enum class Grip(val left: Boolean = false, val top: Boolean = false, val right: Boolean = false, val bottom: Boolean = false) {
+    TopLeft(left = true, top = true), TopRight(top = true, right = true),
+    BottomLeft(left = true, bottom = true), BottomRight(right = true, bottom = true),
+    Top(top = true), Bottom(bottom = true), Left(left = true), Right(right = true),
+    Move,
+}
 
 /** The smallest a crop gets, as a fraction of the photo. */
 private const val MinCrop = 0.05f
 
-/**
- * [crop] after dragging [grip] by ([dx], [dy]); all in fractions of the photo, and the crop never leaves it.
- * [lock] keeps the crop's width ÷ height (in those fractions) as it is.
- */
-fun dragCrop(crop: Rect, grip: Grip, dx: Float, dy: Float, lock: Float?): Rect {
+/** [crop] after dragging [grip] by ([dx], [dy]); all in fractions of the photo, and the crop never leaves it. */
+fun dragCrop(crop: Rect, grip: Grip, dx: Float, dy: Float): Rect {
     if (grip == Grip.Move) {
         val x = (crop.left + dx).coerceIn(0f, 1f - crop.width)
         val y = (crop.top + dy).coerceIn(0f, 1f - crop.height)
         return Rect(x, y, x + crop.width, y + crop.height)
     }
-    val left = grip == Grip.TopLeft || grip == Grip.BottomLeft
-    val top = grip == Grip.TopLeft || grip == Grip.TopRight
-    // The opposite corner stays put.
-    val anchorX = if (left) crop.right else crop.left
-    val anchorY = if (top) crop.bottom else crop.top
-    val maxW = if (left) anchorX else 1f - anchorX
-    val maxH = if (top) anchorY else 1f - anchorY
-    var w = (crop.width + if (left) -dx else dx).coerceIn(MinCrop, maxW)
-    var h = (crop.height + if (top) -dy else dy).coerceIn(MinCrop, maxH)
-    if (lock != null) {
-        // Follow whichever way the finger moved more, then shrink to fit rather than run off the photo.
-        if (abs(dx) >= abs(dy * lock)) h = w / lock else w = h * lock
-        if (w > maxW) { w = maxW; h = w / lock }
-        if (h > maxH) { h = maxH; w = h * lock }
-    }
-    val x = if (left) anchorX - w else anchorX
-    val y = if (top) anchorY - h else anchorY
-    return Rect(x, y, x + w, y + h)
-}
-
-/** The biggest [lock]-shaped crop that fits, or a tall strip down the middle when the shape is free (a spine). */
-private fun startCrop(lock: Float?): Rect {
-    if (lock == null) return Rect(0.3f, 0.05f, 0.7f, 0.95f)
-    val w = minOf(1f, lock)
-    val h = w / lock
-    return Rect((1 - w) / 2, (1 - h) / 2, (1 + w) / 2, (1 + h) / 2)
+    // The sides the grip holds follow the finger, the rest stay put. The photo's edge wins over the minimum size.
+    return Rect(
+        if (grip.left) (crop.left + dx).coerceAtMost(crop.right - MinCrop).coerceAtLeast(0f) else crop.left,
+        if (grip.top) (crop.top + dy).coerceAtMost(crop.bottom - MinCrop).coerceAtLeast(0f) else crop.top,
+        if (grip.right) (crop.right + dx).coerceAtLeast(crop.left + MinCrop).coerceAtMost(1f) else crop.right,
+        if (grip.bottom) (crop.bottom + dy).coerceAtLeast(crop.top + MinCrop).coerceAtMost(1f) else crop.bottom,
+    )
 }
 
 /**
- * Full-screen crop: drag a corner to resize, or inside to move. [aspect] (width ÷ height) locks the shape.
+ * Full-screen crop: drag a corner to resize, an edge to move just that side, or inside to move it all.
  * Hands back the cropped JPEG and its width ÷ height, or nothing if you cancel.
  */
 @Composable
-private fun CropPhoto(jpeg: ByteArray, aspect: Float?, onDone: (Pair<ByteArray, Float>?) -> Unit) {
+private fun CropPhoto(jpeg: ByteArray, spine: Boolean, onDone: (Pair<ByteArray, Float>?) -> Unit) {
     var photo by remember { mutableStateOf<Size?>(null) } // its size, once Coil has decoded it
     var crop by remember { mutableStateOf(Rect.Zero) }
-    // The aspect in fractions of this photo, which is rarely square.
-    val lock = photo?.let { p -> aspect?.let { it * p.height / p.width } }
 
     Dialog(onDismissRequest = { onDone(null) }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(
@@ -290,7 +270,7 @@ private fun CropPhoto(jpeg: ByteArray, aspect: Float?, onDone: (Pair<ByteArray, 
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
-                if (aspect == null) "DRAG THE CORNERS TO THE EDGES OF THE SPINE" else "DRAG THE CORNERS TO THE EDGES OF THE COVER",
+                if (spine) "DRAG THE CORNERS TO THE EDGES OF THE SPINE" else "DRAG THE CORNERS TO THE EDGES OF THE COVER",
                 style = MaterialTheme.typography.labelSmall,
                 color = Color.White.copy(alpha = 0.7f),
                 textAlign = TextAlign.Center,
@@ -302,28 +282,31 @@ private fun CropPhoto(jpeg: ByteArray, aspect: Float?, onDone: (Pair<ByteArray, 
                         jpeg, contentDescription = null, contentScale = ContentScale.FillBounds, modifier = Modifier.fillMaxSize(),
                         onSuccess = {
                             val size = Size(it.result.image.width.toFloat(), it.result.image.height.toFloat())
-                            if (photo == null) crop = startCrop(aspect?.let { a -> a * size.height / size.width })
+                            // A spine starts as a tall strip down the middle, a cover as the whole photo.
+                            if (photo == null) crop = if (spine) Rect(0.3f, 0.05f, 0.7f, 0.95f) else Rect(0f, 0f, 1f, 1f)
                             photo = size
                         },
                     )
                     if (photo != null) Canvas(
-                        Modifier.fillMaxSize().pointerInput(lock) {
+                        Modifier.fillMaxSize().pointerInput(Unit) {
                             var grip: Grip? = null
                             detectDragGestures(
                                 onDragStart = { at ->
                                     val box = Rect(crop.left * size.width, crop.top * size.height, crop.right * size.width, crop.bottom * size.height)
-                                    val corners = mapOf(
+                                    val handles = mapOf(
                                         Grip.TopLeft to box.topLeft, Grip.TopRight to box.topRight,
                                         Grip.BottomLeft to box.bottomLeft, Grip.BottomRight to box.bottomRight,
+                                        Grip.Top to box.topCenter, Grip.Bottom to box.bottomCenter,
+                                        Grip.Left to box.centerLeft, Grip.Right to box.centerRight,
                                     )
-                                    // A corner within reach of the finger, else the middle to move it, else nothing.
-                                    grip = corners.entries.minBy { (it.value - at).getDistance() }
+                                    // A handle within reach of the finger, else the middle to move it, else nothing.
+                                    grip = handles.entries.minBy { (it.value - at).getDistance() }
                                         .takeIf { (it.value - at).getDistance() < 40.dp.toPx() }?.key
                                         ?: Grip.Move.takeIf { box.contains(at) }
                                 },
                             ) { change, drag ->
                                 change.consume()
-                                grip?.let { crop = dragCrop(crop, it, drag.x / size.width, drag.y / size.height, lock) }
+                                grip?.let { crop = dragCrop(crop, it, drag.x / size.width, drag.y / size.height) }
                             }
                         }
                     ) {
@@ -338,6 +321,10 @@ private fun CropPhoto(jpeg: ByteArray, aspect: Float?, onDone: (Pair<ByteArray, 
                         )
                         drawRect(Color.White, box.topLeft, box.size, style = Stroke(2.dp.toPx()))
                         listOf(box.topLeft, box.topRight, box.bottomLeft, box.bottomRight).forEach { drawCircle(Color.White, 7.dp.toPx(), it) }
+                        // Short bars mid-edge: pull one to move just that side.
+                        val bar = 12.dp.toPx()
+                        listOf(box.topCenter, box.bottomCenter).forEach { drawLine(Color.White, it - Offset(bar, 0f), it + Offset(bar, 0f), 5.dp.toPx(), StrokeCap.Round) }
+                        listOf(box.centerLeft, box.centerRight).forEach { drawLine(Color.White, it - Offset(0f, bar), it + Offset(0f, bar), 5.dp.toPx(), StrokeCap.Round) }
                     }
                 }
             }

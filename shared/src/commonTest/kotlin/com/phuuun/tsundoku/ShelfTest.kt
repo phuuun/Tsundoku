@@ -29,12 +29,11 @@ class ShelfTest {
     @Test
     fun dragsTheCrop() {
         val crop = Rect(0.2f, 0.2f, 0.6f, 0.6f)
-        assertNear(Rect(0.3f, 0.2f, 0.6f, 0.7f), dragCrop(crop, Grip.TopLeft, 0.1f, 0f, null).let { dragCrop(it, Grip.BottomLeft, 0f, 0.1f, null) })
-        assertNear(Rect(0.6f, 0.2f, 1f, 0.6f), dragCrop(crop, Grip.Move, 0.9f, 0f, null)) // stops at the edge
-        assertEquals(0.05f, dragCrop(crop, Grip.BottomRight, -1f, -1f, null).width, 0.0001f) // never smaller than 5%
-        val locked = dragCrop(crop, Grip.BottomRight, 0.2f, 0f, lock = 0.5f)
-        assertEquals(0.5f, locked.width / locked.height, 0.0001f)
-        assertEquals(1f, locked.bottom, 0.0001f) // the lock shrinks it to fit rather than run off the photo
+        assertNear(Rect(0.3f, 0.2f, 0.6f, 0.7f), dragCrop(crop, Grip.TopLeft, 0.1f, 0f).let { dragCrop(it, Grip.BottomLeft, 0f, 0.1f) })
+        assertNear(Rect(0.6f, 0.2f, 1f, 0.6f), dragCrop(crop, Grip.Move, 0.9f, 0f)) // stops at the edge
+        assertEquals(0.05f, dragCrop(crop, Grip.BottomRight, -1f, -1f).width, 0.0001f) // never smaller than 5%
+        assertNear(Rect(0.2f, 0.2f, 0.6f, 0.7f), dragCrop(crop, Grip.Bottom, 0.3f, 0.1f)) // an edge ignores sideways drift
+        assertNear(Rect(0f, 0.2f, 0.6f, 0.6f), dragCrop(crop, Grip.Left, -0.5f, 0.3f)) // and stops at the photo's edge
     }
 
     private fun assertNear(expected: Rect, actual: Rect) =
