@@ -194,6 +194,26 @@ private fun Shelves(library: Library) {
         }
     }
 
+    // Each Open Library cover is saved on the phone once, so a held book shows its cover straight away.
+    // ponytail: covers Open Library doesn't have (404) are retried every launch, and saved copies of removed books stay on disk; add a list of misses / a sweep if it matters
+    LaunchedEffect(library) {
+        loadSavedCovers(library.dir)
+        var limited = false
+        snapshotFlow { library.books.filter { it.coverFile == null }.mapNotNull { it.coverUrl } }.collect { urls ->
+            for (url in urls) {
+                if (limited) break
+                if (savedCover(url) != null) continue
+                try {
+                    saveCover(library.dir, url)
+                } catch (e: RateLimited) {
+                    limited = true // no more this launch
+                } catch (e: Exception) {
+                    continue // offline or a bad file: it's tried again next launch
+                }
+            }
+        }
+    }
+
     Box(Modifier.fillMaxSize().background(Bold.Paper)) {
         Column(Modifier.fillMaxSize()) {
             Header(
@@ -539,6 +559,7 @@ private fun EmptyShelf(page: Int, query: String) {
 fun Cover(book: Book, modifier: Modifier, photo: ByteArray? = null) {
     val colors = MaterialTheme.colorScheme
     val dir = LocalDataDir.current
+    val saved = savedCover(book.coverUrl)
     Box(
         modifier
             .aspectRatio(2f / 3f)
@@ -557,7 +578,7 @@ fun Cover(book: Book, modifier: Modifier, photo: ByteArray? = null) {
             modifier = Modifier.padding(10.dp),
         )
         AsyncImage(
-            model = photo ?: book.coverFile?.let { "file://$dir/$it" } ?: book.coverUrl,
+            model = photo ?: book.coverFile?.let { "file://$dir/$it" } ?: saved?.let { "file://$dir/$it" } ?: book.coverUrl,
             contentDescription = book.title,
             // Your own photo shows exactly as you cropped it (squeezed a little if it isn't 2:3); Open Library's is trimmed to fit.
             contentScale = if (photo != null || book.coverFile != null) ContentScale.FillBounds else ContentScale.Crop,

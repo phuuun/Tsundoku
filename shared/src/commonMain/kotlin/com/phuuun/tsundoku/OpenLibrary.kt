@@ -2,6 +2,7 @@ package com.phuuun.tsundoku
 
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.expectSuccess
+import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
@@ -36,6 +37,16 @@ internal fun parseSearch(isbn: String, body: String): Book? {
         author = doc["author_name"]?.jsonArray?.firstOrNull()?.jsonPrimitive?.content.orEmpty(),
         coverUrl = doc["cover_i"]?.jsonPrimitive?.intOrNull?.let { "https://covers.openlibrary.org/b/id/$it-L.jpg" },
     )
+}
+
+/** Open Library asked us to slow down (HTTP 429). */
+class RateLimited : Exception("Open Library: 429")
+
+/** The cover's bytes; null when it can't be had (404 and the like), throws [RateLimited] on 429 and when it can't be reached. */
+suspend fun downloadCover(url: String): ByteArray? {
+    val response = client.get(url) { expectSuccess = false }
+    if (response.status == HttpStatusCode.TooManyRequests) throw RateLimited()
+    return if (response.status == HttpStatusCode.OK) response.body() else null
 }
 
 /** Page count and size of this exact edition. Null when Open Library doesn't know the ISBN; throws when it can't be reached. */

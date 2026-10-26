@@ -342,7 +342,7 @@ private fun CropPhoto(jpeg: ByteArray, spine: Boolean, onDone: (Pair<ByteArray, 
                 TextButton({ onDone(null) }) { Text("Cancel", color = Bold.Muted) }
                 PillButton(
                     "Use photo",
-                    onClick = { photo?.let { p -> onDone(cropJpeg(jpeg, crop, quality = 85) to crop.width * p.width / (crop.height * p.height)) } },
+                    onClick = { photo?.let { p -> onDone(cropJpeg(jpeg, crop, quality = 70) to crop.width * p.width / (crop.height * p.height)) } },
                     enabled = photo != null,
                 )
             }
